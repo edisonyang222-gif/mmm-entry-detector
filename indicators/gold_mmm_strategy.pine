@@ -59,11 +59,16 @@ slAtrMult    = input.float(2.0, "停損 ATR 倍數", minval=0.5, step=0.1, group
 tp1AtrMult   = input.float(3.0, "TP1 ATR 倍數", minval=0.5, step=0.1, group=grpRisk)
 tp2AtrMult   = input.float(5.0, "TP2 ATR 倍數", minval=1.0, step=0.1, group=grpRisk)
 
-grpSession = "⑩ 時段過濾"
-useSession   = input.bool(true, "只做倫敦 / 紐約時段", group=grpSession)
-useOverlap   = input.bool(false, "只做倫敦紐約重疊", group=grpSession)
-londonSess   = input.session("0700-1600", "倫敦時段", group=grpSession)
-nySess       = input.session("1300-2100", "紐約時段", group=grpSession)
+grpSession = "⑩ 時段過濾（台北時間）"
+useSession   = input.bool(true, "啟用時段過濾", group=grpSession)
+tz           = input.string("Asia/Taipei", "時區", options=["Asia/Taipei", "UTC", "America/New_York", "Europe/London"], group=grpSession)
+tradeAsia    = input.bool(false, "交易亞盤", group=grpSession)
+tradeLondon  = input.bool(true, "交易倫敦盤", group=grpSession)
+tradeNy      = input.bool(true, "交易美盤", group=grpSession)
+useOverlap   = input.bool(false, "只做倫敦與美盤重疊", group=grpSession)
+asiaSess     = input.session("0700-1400", "亞盤（預設 07:00–14:00）", group=grpSession)
+londonSess   = input.session("1500-2330", "倫敦盤（預設 15:00–23:30）", group=grpSession)
+nySess       = input.session("2130-0400", "美盤（預設 21:30–隔日 04:00）", group=grpSession)
 
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
@@ -82,9 +87,12 @@ slopeLongOk  = not useSlope or emaSlopeUp
 slopeShortOk = not useSlope or emaSlopeDown
 volOk = atrMa > 0 and atrVal / atrMa >= minAtrMult and atrVal / atrMa <= maxAtrMult
 
-inLondon = not na(time(timeframe.period, londonSess))
-inNY     = not na(time(timeframe.period, nySess))
-sessionOk = not useSession or (useOverlap ? (inLondon and inNY) : (inLondon or inNY))
+inAsia   = not na(time(timeframe.period, asiaSess, tz))
+inLondon = not na(time(timeframe.period, londonSess, tz))
+inNY     = not na(time(timeframe.period, nySess, tz))
+inAllowed = (tradeAsia and inAsia) or (tradeLondon and inLondon) or (tradeNy and inNY)
+overlapOk = inLondon and inNY
+sessionOk = not useSession or (useOverlap ? overlapOk : inAllowed)
 
 pullbackLong  = low <= emaFast * 1.001 and close > emaFast
 pullbackShort = high >= emaFast * 0.999 and close < emaFast

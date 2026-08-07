@@ -60,11 +60,16 @@ slAtrMult    = input.float(2.0, "停損 ATR 倍數", minval=0.5, step=0.1, group
 tp1AtrMult   = input.float(3.0, "TP1 ATR 倍數", minval=0.5, step=0.1, group=grpRisk)
 tp2AtrMult   = input.float(5.0, "TP2 ATR 倍數", minval=1.0, step=0.1, group=grpRisk)
 
-grpSession = "⑩ 時段過濾（小週期建議開）"
-useSession   = input.bool(true, "只做倫敦 / 紐約時段", group=grpSession, tooltip="小週期建議開啟；H4/D1 可關閉。")
-useOverlap   = input.bool(false, "只做倫敦紐約重疊（更嚴）", group=grpSession)
-londonSess   = input.session("0700-1600", "倫敦時段", group=grpSession)
-nySess       = input.session("1300-2100", "紐約時段", group=grpSession)
+grpSession = "⑩ 時段過濾（台北時間）"
+useSession   = input.bool(true, "啟用時段過濾", group=grpSession, tooltip="時間以台北時區為準。小週期建議開啟；H4/D1 可關閉。")
+tz           = input.string("Asia/Taipei", "時區", options=["Asia/Taipei", "UTC", "America/New_York", "Europe/London"], group=grpSession)
+tradeAsia    = input.bool(false, "交易亞盤", group=grpSession, tooltip="預設關閉：亞盤波動較小。需要可自行開啟。")
+tradeLondon  = input.bool(true, "交易倫敦盤", group=grpSession)
+tradeNy      = input.bool(true, "交易美盤", group=grpSession)
+useOverlap   = input.bool(false, "只做倫敦與美盤重疊", group=grpSession, tooltip="更嚴：僅倫敦∩美盤時段可做。")
+asiaSess     = input.session("0700-1400", "亞盤（預設 07:00–14:00）", group=grpSession)
+londonSess   = input.session("1500-2330", "倫敦盤（預設 15:00–23:30）", group=grpSession)
+nySess       = input.session("2130-0400", "美盤（預設 21:30–隔日 04:00）", group=grpSession)
 
 grpUi = "⑪ 顯示"
 showLevels   = input.bool(true, "訊號顯示停損/停利", group=grpUi)
@@ -94,9 +99,15 @@ slopeShortOk = not useSlope or emaSlopeDown
 
 volOk = atrMa > 0 and atrVal / atrMa >= minAtrMult and atrVal / atrMa <= maxAtrMult
 
-inLondon = not na(time(timeframe.period, londonSess))
-inNY     = not na(time(timeframe.period, nySess))
-sessionOk = not useSession or (useOverlap ? (inLondon and inNY) : (inLondon or inNY))
+inAsia   = not na(time(timeframe.period, asiaSess, tz))
+inLondon = not na(time(timeframe.period, londonSess, tz))
+inNY     = not na(time(timeframe.period, nySess, tz))
+
+inAllowed = (tradeAsia and inAsia) or (tradeLondon and inLondon) or (tradeNy and inNY)
+overlapOk = inLondon and inNY
+sessionOk = not useSession or (useOverlap ? overlapOk : inAllowed)
+
+sessionName = inLondon and inNY ? "倫美重疊" : inNY ? "美盤" : inLondon ? "倫敦盤" : inAsia ? "亞盤" : "休市"
 
 pullbackLong  = low <= emaFast * 1.001 and close > emaFast
 pullbackShort = high >= emaFast * 0.999 and close < emaFast
@@ -211,7 +222,7 @@ if barstate.islast
     table.cell(dash, 0, 5, "MACD柱", text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 5, macdHist > 0 ? "多動能" : "空動能", text_color=macdHist > 0 ? color.lime : color.red, text_size=size.small)
     table.cell(dash, 0, 6, "時段", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 6, sessionOk ? "可做" : "休息", text_color=sessionOk ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 1, 6, sessionOk ? sessionName : sessionName + "·休", text_color=sessionOk ? color.lime : color.red, text_size=size.small)
     table.cell(dash, 0, 7, "多分數", text_color=color.gray, text_size=size.small)
     table.cell(dash, 1, 7, str.tostring(scoreLong) + " / 8", text_color=scoreLong >= minScore ? color.lime : color.orange, text_size=size.small)
     table.cell(dash, 0, 8, "空分數", text_color=color.gray, text_size=size.small)

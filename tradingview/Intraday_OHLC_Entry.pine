@@ -107,8 +107,12 @@ if newDay
         lnMid := f_newHLine(mid0, color.gray, 1)
         lnPdc := f_newHLine(pdc, color.silver, 1)
         lnDo  := f_newHLine(dayOpen, color.orange, 2)
-        lnOrh := na
-        lnOrl := na
+        if orbReady
+            lnOrh := f_newHLine(orbHigh, color.aqua, 1)
+            lnOrl := f_newHLine(orbLow, color.fuchsia, 1)
+        else
+            lnOrh := na
+            lnOrl := na
         if showLevelLbl
             lbPdh := label.new(bar_index, pdh, "PDH " + str.tostring(pdh, format.mintick), style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal, size=size.small)
             lbPdl := label.new(bar_index, pdl, "PDL " + str.tostring(pdl, format.mintick), style=label.style_label_left, color=color.new(color.maroon, 70), textcolor=color.maroon, size=size.small)

@@ -290,10 +290,6 @@ if showSR and not na(validResist)
         line.set_y1(lnRes, validResist)
         line.set_y2(lnRes, validResist)
 
-// 不再使用中斷 plot 線
-plot(na, "有效支撐(隱藏)", display=display.none)
-plot(na, "有效阻力(隱藏)", display=display.none)
-
 if showPlan and (buySignal or sellSignal)
     line.new(bar_index, sigEntry, bar_index + 8, sigEntry, color=buySignal ? color.teal : color.red, width=1)
     line.new(bar_index, sigSL, bar_index + 8, sigSL, color=color.red, style=line.style_dotted)

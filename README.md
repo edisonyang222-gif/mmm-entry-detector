@@ -28,4 +28,7 @@ pytest -q
 
 ## TradingView
 
-基礎 OHLC 見 `tradingview/Intraday_OHLC_Entry.pine`（結構面版以 MT5 為主）。
+**推薦：** [`tradingview/OHLC_MTF_Structure.pine`](tradingview/OHLC_MTF_Structure.pine)  
+（中文多時框面版、流動性掃除、回踩有效 S/R；安裝見 `tradingview/README.md`）
+
+基礎 OHLC：`tradingview/Intraday_OHLC_Entry.pine`。

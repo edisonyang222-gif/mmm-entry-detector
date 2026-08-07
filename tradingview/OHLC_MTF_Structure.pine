@@ -1,0 +1,301 @@
+//@version=5
+indicator("OHLC多時框結構進場", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
+
+//══════════════════════════════════════════════════════════════
+// 輸入
+//══════════════════════════════════════════════════════════════
+grpTF   = "時框"
+htfTF   = input.timeframe("60",  "高週期（趨勢）", group=grpTF)
+mtfTF   = input.timeframe("15",  "中週期（結構）", group=grpTF)
+// 低週期 = 當前圖表
+
+grpStr  = "結構參數"
+swingLen     = input.int(2, "擺盪左右K數", minval=1, group=grpStr)
+atrLen       = input.int(14, "ATR週期", group=grpStr)
+sweepLookback= input.int(30, "流動性有效窗口（K）", group=grpStr)
+sweepWickAtr = input.float(0.05, "掃除影線ATR倍數", step=0.01, group=grpStr)
+zoneAtr      = input.float(0.35, "回踩區寬度ATR", step=0.05, group=grpStr)
+confirmBody  = input.float(0.45, "確認K實體占比", step=0.05, group=grpStr)
+stopBufAtr   = input.float(0.15, "停損緩衝ATR", step=0.05, group=grpStr)
+minRR        = input.float(1.5, "最小盈虧比", step=0.1, group=grpStr)
+tpRR         = input.float(2.0, "停利RR", step=0.1, group=grpStr)
+requireHtf   = input.bool(true, "須符合高週期偏向", group=grpStr)
+requireSweep = input.bool(true, "須先掃除流動性", group=grpStr)
+onePerSetup  = input.bool(true, "同一掃除僅一次進場", group=grpStr)
+
+grpShow = "顯示"
+showPanel    = input.bool(true, "顯示中文面版", group=grpShow)
+showSR       = input.bool(true, "顯示有效支撐/阻力", group=grpShow)
+showSweep    = input.bool(true, "顯示流動性掃除", group=grpShow)
+showBuy      = input.bool(true, "顯示買入訊號", group=grpShow)
+showSell     = input.bool(true, "顯示賣出訊號", group=grpShow)
+showPlan     = input.bool(true, "顯示進場/SL/TP", group=grpShow)
+
+atr = ta.atr(atrLen)
+
+//══════════════════════════════════════════════════════════════
+// 工具：偏向文字
+//══════════════════════════════════════════════════════════════
+biasCN(int b) =>
+    b == 1 ? "偏多 ▲" : b == -1 ? "偏空 ▼" : "盤整 ─"
+
+consensusCN(int b) =>
+    b == 1 ? "大概率向上" : b == -1 ? "大概率向下" : "方向不明，觀望"
+
+biasColor(int b) =>
+    b == 1 ? color.new(color.teal, 0) : b == -1 ? color.new(color.red, 0) : color.new(color.gray, 0)
+
+//══════════════════════════════════════════════════════════════
+// 擺盪結構偏向（已確認樞軸，不重繪）
+//══════════════════════════════════════════════════════════════
+ph = ta.pivothigh(high, swingLen, swingLen)
+pl = ta.pivotlow(low, swingLen, swingLen)
+
+var float sh1 = na
+var float sh2 = na
+var float sl1 = na
+var float sl2 = na
+
+if not na(ph)
+    sh2 := sh1
+    sh1 := ph
+if not na(pl)
+    sl2 := sl1
+    sl1 := pl
+
+chartBias() =>
+    int b = 0
+    if not na(sh1) and not na(sh2) and not na(sl1) and not na(sl2)
+        hh = sh1 > sh2
+        hl = sl1 > sl2
+        lh = sh1 < sh2
+        ll = sl1 < sl2
+        if hh and hl
+            b := 1
+        else if lh and ll
+            b := -1
+    b
+
+ltfBias = chartBias()
+
+// 高/中週期偏向（用 request.security，收盤確認）
+htfBiasRaw = request.security(syminfo.tickerid, htfTF, chartBias(), barmerge.gaps_off, barmerge.lookahead_off)
+mtfBiasRaw = request.security(syminfo.tickerid, mtfTF, chartBias(), barmerge.gaps_off, barmerge.lookahead_off)
+htfBias = nz(htfBiasRaw, 0)
+mtfBias = nz(mtfBiasRaw, 0)
+
+// 綜合偏向：HTF+MTF 同向最優先
+consensus =
+     htfBias == mtfBias and htfBias != 0 ? htfBias :
+     htfBias != 0 and mtfBias == 0 ? htfBias :
+     htfBias == 0 and mtfBias != 0 ? mtfBias :
+     htfBias != 0 and ltfBias == htfBias ? htfBias : 0
+
+reasonTxt =
+     consensus == 1 ? "高週期與中週期結構偏多，優先找回踩做多" :
+     consensus == -1 ? "高週期與中週期結構偏空，優先找回踩做空" :
+     "多時框未對齊，等待結構轉折或流動性掃除"
+
+//══════════════════════════════════════════════════════════════
+// 最近有效擺盪低/高（樞軸確認後）
+//══════════════════════════════════════════════════════════════
+var float lastSwingLow = na
+var float lastSwingHigh = na
+var int   lastSwingLowBar = na
+var int   lastSwingHighBar = na
+
+if not na(pl)
+    lastSwingLow := pl
+    lastSwingLowBar := bar_index - swingLen
+if not na(ph)
+    lastSwingHigh := ph
+    lastSwingHighBar := bar_index - swingLen
+
+// 實體收盤跌破/升破則標記失效（簡易）
+swingLowBroken = not na(lastSwingLow) and close < lastSwingLow
+swingHighBroken = not na(lastSwingHigh) and close > lastSwingHigh
+
+//══════════════════════════════════════════════════════════════
+// 流動性掃除（僅收K確認 → 訊號不消失）
+//══════════════════════════════════════════════════════════════
+wickMin = sweepWickAtr * atr
+
+sweepLowNow = barstate.isconfirmed and not na(lastSwingLow) and not swingLowBroken[1] and low < lastSwingLow - wickMin and close > lastSwingLow and close > open
+sweepHighNow = barstate.isconfirmed and not na(lastSwingHigh) and not swingHighBroken[1] and high > lastSwingHigh + wickMin and close < lastSwingHigh and close < open
+
+var bool  hasLowSweep = false
+var bool  hasHighSweep = false
+var float lowSweepLevel = na
+var float highSweepLevel = na
+var int   lowSweepBar = na
+var int   highSweepBar = na
+var bool  lowConsumed = false
+var bool  highConsumed = false
+var bool  lowLeftZone = false
+var bool  highLeftZone = false
+
+if barstate.isconfirmed
+    // 過期
+    if hasLowSweep and not na(lowSweepBar) and (bar_index - lowSweepBar) > sweepLookback
+        hasLowSweep := false
+        lowConsumed := false
+        lowLeftZone := false
+    if hasHighSweep and not na(highSweepBar) and (bar_index - highSweepBar) > sweepLookback
+        hasHighSweep := false
+        highConsumed := false
+        highLeftZone := false
+
+    if sweepLowNow
+        hasLowSweep := true
+        lowSweepLevel := lastSwingLow
+        lowSweepBar := bar_index
+        lowConsumed := false
+        lowLeftZone := false
+    if sweepHighNow
+        hasHighSweep := true
+        highSweepLevel := lastSwingHigh
+        highSweepBar := bar_index
+        highConsumed := false
+        highLeftZone := false
+
+    // 離開區間（回踩前提）
+    if hasLowSweep and not lowConsumed and not na(lowSweepLevel) and close > lowSweepLevel + zoneAtr * atr
+        lowLeftZone := true
+    if hasHighSweep and not highConsumed and not na(highSweepLevel) and close < highSweepLevel - zoneAtr * atr
+        highLeftZone := true
+
+// 有效支撐/阻力
+validSupport = hasLowSweep and not na(lowSweepLevel) ? lowSweepLevel : (not na(lastSwingLow) and not swingLowBroken and close > lastSwingLow ? lastSwingLow : na)
+validResist  = hasHighSweep and not na(highSweepLevel) ? highSweepLevel : (not na(lastSwingHigh) and not swingHighBroken and close < lastSwingHigh ? lastSwingHigh : na)
+supNote = hasLowSweep ? "掃除後有效支撐" : (not na(validSupport) ? "擺盪低點支撐" : "無")
+resNote = hasHighSweep ? "掃除後有效阻力" : (not na(validResist) ? "擺盪高點阻力" : "無")
+
+//══════════════════════════════════════════════════════════════
+// 回踩進場（收K確認）
+//══════════════════════════════════════════════════════════════
+rng = high - low
+bodyRatio = rng > 0 ? math.abs(close - open) / rng : 0.0
+bullConfirm = close > open and bodyRatio >= confirmBody
+bearConfirm = close < open and bodyRatio >= confirmBody
+
+bullBiasOk = not requireHtf or consensus == 1 or htfBias == 1
+bearBiasOk = not requireHtf or consensus == -1 or htfBias == -1
+
+buySignal = false
+sellSignal = false
+var float sigEntry = na
+var float sigSL = na
+var float sigTP = na
+var string sigType = ""
+
+if barstate.isconfirmed
+    // 買：掃除下方 → 離開 → 回踩支撐 → 陽線
+    if bullBiasOk and not na(validSupport)
+        sweepOk = not requireSweep or hasLowSweep
+        unused = not onePerSetup or not lowConsumed
+        pulled = not requireSweep or lowLeftZone
+        afterSweep = not hasLowSweep or bar_index > nz(lowSweepBar, -1)
+        zoneTop = validSupport + zoneAtr * atr
+        zoneBot = validSupport - zoneAtr * atr
+        touched = (low <= zoneTop and low >= zoneBot) or (low <= validSupport and close >= validSupport)
+        if sweepOk and unused and pulled and afterSweep and touched and bullConfirm and close >= validSupport
+            entry = close
+            sl = math.min(zoneBot, validSupport) - stopBufAtr * atr
+            risk = entry - sl
+            tp = entry + tpRR * risk
+            rr = risk > 0 ? (tp - entry) / risk : 0.0
+            if rr >= minRR
+                buySignal := true
+                sigEntry := entry
+                sigSL := sl
+                sigTP := tp
+                sigType := "回踩有效支撐"
+                if onePerSetup
+                    lowConsumed := true
+
+    // 賣：掃除上方 → 離開 → 回踩阻力 → 陰線
+    if not buySignal and bearBiasOk and not na(validResist)
+        sweepOk = not requireSweep or hasHighSweep
+        unused = not onePerSetup or not highConsumed
+        pulled = not requireSweep or highLeftZone
+        afterSweep = not hasHighSweep or bar_index > nz(highSweepBar, -1)
+        zoneTop = validResist + zoneAtr * atr
+        zoneBot = validResist - zoneAtr * atr
+        touched = (high >= zoneBot and high <= zoneTop) or (high >= validResist and close <= validResist)
+        if sweepOk and unused and pulled and afterSweep and touched and bearConfirm and close <= validResist
+            entry = close
+            sl = math.max(zoneTop, validResist) + stopBufAtr * atr
+            risk = sl - entry
+            tp = entry - tpRR * risk
+            rr = risk > 0 ? (entry - tp) / risk : 0.0
+            if rr >= minRR
+                sellSignal := true
+                sigEntry := entry
+                sigSL := sl
+                sigTP := tp
+                sigType := "回踩有效阻力"
+                if onePerSetup
+                    highConsumed := true
+
+//══════════════════════════════════════════════════════════════
+// 繪圖（收K後固定，不消失）
+//══════════════════════════════════════════════════════════════
+plotshape(showBuy and buySignal, title="買入", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="買")
+plotshape(showSell and sellSignal, title="賣出", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="賣")
+
+plotshape(showSweep and sweepLowNow, title="掃除下方", style=shape.diamond, location=location.belowbar, color=color.aqua, size=size.tiny)
+plotshape(showSweep and sweepHighNow, title="掃除上方", style=shape.diamond, location=location.abovebar, color=color.fuchsia, size=size.tiny)
+
+plot(showSR and not na(validSupport) ? validSupport : na, "有效支撐", color=color.new(color.teal, 0), style=plot.style_linebr, linewidth=2)
+plot(showSR and not na(validResist) ? validResist : na, "有效阻力", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2)
+
+if showPlan and (buySignal or sellSignal)
+    line.new(bar_index, sigEntry, bar_index + 8, sigEntry, color=buySignal ? color.teal : color.red, width=1)
+    line.new(bar_index, sigSL, bar_index + 8, sigSL, color=color.red, style=line.style_dotted)
+    line.new(bar_index, sigTP, bar_index + 8, sigTP, color=color.lime, style=line.style_dotted)
+    label.new(bar_index, buySignal ? low : high, sigType, style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.small)
+
+//══════════════════════════════════════════════════════════════
+// 中文面版（表格）
+//══════════════════════════════════════════════════════════════
+var table panel = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 15), border_width=1, border_color=color.gray)
+
+liqTxt =
+     hasLowSweep ? "已掃除下方 ✓" :
+     hasHighSweep ? "已掃除上方 ✓" : "尚未掃除"
+liqCol =
+     hasLowSweep ? color.aqua :
+     hasHighSweep ? color.fuchsia : color.gray
+
+armTxt =
+     hasLowSweep and not lowConsumed and lowLeftZone ? "偏多｜已離開，等待回踩支撐" :
+     hasLowSweep and not lowConsumed ? "偏多｜已掃除，等待離開後回踩" :
+     hasHighSweep and not highConsumed and highLeftZone ? "偏空｜已離開，等待回踩阻力" :
+     hasHighSweep and not highConsumed ? "偏空｜已掃除，等待離開後回踩" :
+     "等待流動性掃除"
+
+f_cell(int r, string a, string b, color c) =>
+    table.cell(panel, 0, r, a, text_color=color.silver, text_halign=text.align_left, text_size=size.small)
+    table.cell(panel, 1, r, b, text_color=c, text_halign=text.align_left, text_size=size.small)
+
+if showPanel and barstate.islast
+    table.cell(panel, 0, 0, "多時框結構面版", text_color=color.yellow, text_halign=text.align_left, text_size=size.normal)
+    table.cell(panel, 1, 0, "", text_color=color.yellow)
+    f_cell(1, "高週期 " + htfTF, biasCN(htfBias), biasColor(htfBias))
+    f_cell(2, "中週期 " + mtfTF, biasCN(mtfBias), biasColor(mtfBias))
+    f_cell(3, "低週期 圖表", biasCN(ltfBias), biasColor(ltfBias))
+    f_cell(4, "綜合偏向", consensusCN(consensus), biasColor(consensus))
+    f_cell(5, "理由", reasonTxt, color.white)
+    f_cell(6, "流動性", liqTxt, liqCol)
+    f_cell(7, "有效支撐", na(validSupport) ? "無" : str.tostring(validSupport, format.mintick) + "（" + supNote + "）", color.teal)
+    f_cell(8, "有效阻力", na(validResist) ? "無" : str.tostring(validResist, format.mintick) + "（" + resNote + "）", color.red)
+    f_cell(9, "設置狀態", armTxt, color.aqua)
+    lastSigTxt = buySignal ? "買入｜" + sigType : sellSignal ? "賣出｜" + sigType : "無（僅收K確認）"
+    f_cell(10, "最近訊號", lastSigTxt, buySignal ? color.lime : sellSignal ? color.red : color.gray)
+    planTxt = (buySignal or sellSignal) ? ("進場 " + str.tostring(sigEntry, format.mintick) + "  SL " + str.tostring(sigSL, format.mintick) + "  TP " + str.tostring(sigTP, format.mintick)) : "訊號收K後固定不消失"
+    f_cell(11, "計畫", planTxt, color.white)
+
+alertcondition(buySignal, "結構買入", "回踩有效支撐買入訊號")
+alertcondition(sellSignal, "結構賣出", "回踩有效阻力賣出訊號")
+alertcondition(sweepLowNow, "掃除下方流動性", "已掃除下方流動性")
+alertcondition(sweepHighNow, "掃除上方流動性", "已掃除上方流動性")

@@ -1,50 +1,42 @@
-# MetaTrader 5 — 日內 OHLC 進場訊號
+# MetaTrader 5 — 日內 OHLC / 多時框結構進場
 
 ## 檔案對應
 
 ```
-mt5/Include/OHLC/IntradayOHLCLogic.mqh  →  <Data Folder>/MQL5/Include/OHLC/IntradayOHLCLogic.mqh
-mt5/Indicators/Intraday_OHLC_Entry.mq5  →  <Data Folder>/MQL5/Indicators/Intraday_OHLC_Entry.mq5
-mt5/Experts/Intraday_OHLC_EA.mq5        →  <Data Folder>/MQL5/Experts/Intraday_OHLC_EA.mq5
+mt5/Include/OHLC/IntradayOHLCLogic.mqh   →  MQL5/Include/OHLC/
+mt5/Include/OHLC/StructureLogic.mqh      →  MQL5/Include/OHLC/
+mt5/Indicators/Intraday_OHLC_Entry.mq5   →  MQL5/Indicators/   （基礎日線OHLC）
+mt5/Indicators/OHLC_MTF_Structure.mq5    →  MQL5/Indicators/   （★推薦：多時框面版）
+mt5/Experts/Intraday_OHLC_EA.mq5         →  MQL5/Experts/
+mt5/Experts/OHLC_MTF_Structure_EA.mq5    →  MQL5/Experts/      （★推薦）
 ```
 
-在 MT5：`File → Open Data Folder` 可找到 Data Folder。編譯指標與 EA 前請先放好 `.mqh`。
+MT5：`File → Open Data Folder`。先放 `.mqh` 再編譯。
 
-## 指標 vs EA
+## 推薦：多時框結構系統
 
 | 元件 | 作用 |
 |------|------|
-| **指標** `Intraday_OHLC_Entry` | 畫 PDH/PDL/日開盤/ORB 與進場箭頭，不下單 |
-| **EA** `Intraday_OHLC_EA` | 同一套邏輯，收線後可市價或 Stop 掛單 |
+| **指標** `OHLC_MTF_Structure` | 中文面版 + 流動性掃除標記 + 回踩進場箭頭 |
+| **EA** `OHLC_MTF_Structure_EA` | 同一邏輯，收K確認後市價進場 |
 
-兩者共用 `IntradayOHLCLogic.mqh`。
+### 面版一眼看懂
 
-## 訊號邏輯（日內 OHLC）
+- 高/中/低週期偏向（偏多▲ / 偏空▼ / 盤整）
+- **綜合偏向預判**：大概率向上 / 向下 / 觀望
+- 流動性是否已掃除（上方/下方）
+- 有效支撐 / 有效阻力價位與來源
+- 設置狀態（回踩監控中 / 等待掃除）
+- 最近進場訊號與 SL/TP/RR
 
-以**前一日 OHLC**與**今日開盤 / Opening Range**為關鍵價：
+### 精準進場型態
 
-| 類型 | 方向 | 條件 |
-|------|------|------|
-| `PDH_BO` | Buy | 收盤向上突破前高 |
-| `PDL_BO` | Sell | 收盤向下突破前低 |
-| `OPEN_BUY` / `OPEN_SELL` | Buy/Sell | 收盤穿越當日開盤價 |
-| `PDH_REJ` | Sell | 觸及前高後收在下方（拒絕） |
-| `PDL_REJ` | Buy | 觸及前低後收在上方（拒絕） |
-| `ORB_BUY` / `ORB_SELL` | Buy/Sell | 突破開盤區間高低 |
-
-### 模式 (`InpMode`)
-
-- `BREAKOUT` — 前高/前低突破 + ORB
-- `REJECTION` — 僅拒絕訊號
-- `OPEN` — 僅日開盤穿越
-- `ALL` — 全部（預設，依優先順序取第一個）
-
-### 風控
-
-- SL：`InpStopAtrMult × ATR`
-- TP：優先下一個 OHLC 結構位（中軸 / 對側日線），否則 `InpTpRR × 風險`
-- 可設每日每邊一筆、交易時段過濾、收盤前平倉
+1. 多時框偏向對齊（可關）
+2. **掃除流動性**（刺破擺盪高/低後收回收盤）
+3. 等待 **回踩有效支撐/阻力**
+4. 收K實體確認 → 進場  
+   → 只在**已收盤K**評分，歷史箭頭與物件以時間為鍵，**收K後不消失、不重繪**
 
 ### 建議周期
 
-M5 / M15 / M30（日內）。`InpSessionStartHour` 對齊券商伺服器日切換（外匯常見 0 或 22–24 視伺服器時區）。
+圖表 M5/M15；高週期 H1；中週期 M15；依商品調整。

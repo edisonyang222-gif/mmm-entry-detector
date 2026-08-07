@@ -1,31 +1,31 @@
 # mmm-entry-detector
 
-日內 **OHLC 進場訊號**指標與 Expert Advisor（MT5），以及對應的 Python / TradingView 實作。
+日內 **OHLC / 多時框結構進場** 指標與 EA（MT5），含中文面版、流動性掃除、有效支撐阻力回踩、收K後不消失的訊號。
 
-## 快速開始（MT5）
+## 你要的能力對應
 
-見 [`mt5/README.md`](mt5/README.md)。
+| 需求 | 實作 |
+|------|------|
+| 精準入場型態 | 偏向對齊 → 流動性掃除 → 回踩有效S/R → 收K確認 |
+| 回踩進場 | `回踩有效支撐` / `回踩有效阻力` |
+| 有效支撐/阻力 | 未失效擺盪點 + 掃除後水位 |
+| 收K後訊號不消失 | 僅評估已收盤K；緩衝與物件以K時間為鍵確定性重算 |
+| 中文直觀面版 | 多時框偏向、流動性、S/R、預判、設置狀態 |
+| 多時框一目了然 | HTF / MTF / LTF + 綜合「大概率走向」 |
+| 掃除流動性 | 影線刺破擺盪極值後收盤收回 |
+| 指標 + EA | `OHLC_MTF_Structure` + `OHLC_MTF_Structure_EA` |
 
-1. 複製 `Include/OHLC/`、`Indicators/`、`Experts/` 到 MT5 Data Folder
-2. MetaEditor 編譯 `Intraday_OHLC_Entry` 與 `Intraday_OHLC_EA`
-3. 圖表掛上指標看訊號；要自動下單再掛 EA
+## MT5 安裝
 
-## 訊號摘要
+見 [`mt5/README.md`](mt5/README.md)。**請優先使用多時框結構指標/EA。**
 
-以前一日 High/Low/Close、當日 Open、Opening Range 為參考：
-
-- **突破**：PDH / PDL / ORB
-- **開盤穿越**：Day Open cross
-- **拒絕**：PDH/PDL wick rejection
-
-## Python（邏輯驗證）
+## Python 驗證
 
 ```bash
 pip install -e ".[dev]"
 pytest -q
-python -m ohlc.cli examples/sample_ohlcv.csv
 ```
 
 ## TradingView
 
-見 [`tradingview/Intraday_OHLC_Entry.pine`](tradingview/Intraday_OHLC_Entry.pine)。
+基礎 OHLC 見 `tradingview/Intraday_OHLC_Entry.pine`（結構面版以 MT5 為主）。

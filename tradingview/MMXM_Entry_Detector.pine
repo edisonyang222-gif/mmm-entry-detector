@@ -21,6 +21,13 @@ int    htfSwingLen = input.int(10, "HTF結構回看根數", minval=3, group="HTF
 int    htfEmaLen = input.int(20, "HTF EMA週期", minval=2, group="HTF→LTF多週期")
 bool   htfAllowFlat = input.bool(false, "HTF中性時仍允許進場", group="HTF→LTF多週期", tooltip="關閉=中性時不出訊號（較嚴）")
 
+// ===== ERL / IRL 流動性路徑 =====
+bool   useErlIrl = input.bool(true, "啟用ERL↔IRL判別", group="ERL/IRL流動性", tooltip="偵測 Dealing Range 外部流動性(ERL)與內部流動性(IRL)，判斷目前往哪邊抽")
+int    dealRangeLen = input.int(50, "Dealing Range 回看根數", minval=10, group="ERL/IRL流動性")
+float  eqTolPct = input.float(0.05, "視為到達IRL(均衡)容差（佔區間）", minval=0.01, maxval=0.25, step=0.01, group="ERL/IRL流動性")
+bool   erlIrlFilter = input.bool(false, "進場需順DOL方向", group="ERL/IRL流動性", tooltip="開啟後：多單需DOL偏多、空單需DOL偏空")
+bool   showDealRange = input.bool(true, "顯示ERL高/低與IRL均衡線", group="ERL/IRL流動性")
+
 // ===== ERT 交易系統（Entry / Risk / Target）=====
 bool   ertLabels = input.bool(true, "標示 E / R / T1 / T2", group="ERT交易系統", tooltip="E=進場價、R=風險停損、T1=1R部分停利、T2=最終目標")
 bool   ertRequireHtf = input.bool(true, "ERT強制要求HTF同向", group="ERT交易系統")
@@ -152,6 +159,99 @@ f_htfAllows(bool isBuy) =>
         htfAllowFlat
     else
         isBuy ? htfBias > 0 : htfBias < 0
+
+// ----- ERL / IRL：Dealing Range 與流動性抽向 -----
+// ERL = 區間外緣高低（BSL/SSL）；IRL = 區間內均衡(EQ)等內部目標
+// 典型路徑：掃到 ERL → 回抽 IRL → 再往另一側 ERL
+float drHi = ta.highest(high, dealRangeLen)
+float drLo = ta.lowest(low, dealRangeLen)
+float drEq = (drHi + drLo) * 0.5
+float drSpan = drHi - drLo
+float eqBand = drSpan > 0.0 ? drSpan * eqTolPct : 0.0
+
+var int lastErlSide = 0  // 1=掃到ERL高(BSL), -1=掃到ERL低(SSL)
+var int dolDir = 0       // 1=偏多, -1=偏空
+var int dolPhase = 0     // 1=ERL→IRL, 2=IRL→ERL
+var float dolTarget = float(na)
+
+bool sweptErlHigh = not na(drHi[1]) and high >= drHi[1]
+bool sweptErlLow = not na(drLo[1]) and low <= drLo[1]
+if useErlIrl
+    if sweptErlHigh
+        lastErlSide := 1
+    else if sweptErlLow
+        lastErlSide := -1
+
+    bool nearIrl = not na(drEq) and math.abs(close - drEq) <= eqBand
+    bool aboveEq = not na(drEq) and close > drEq
+    bool belowEq = not na(drEq) and close < drEq
+
+    if lastErlSide < 0
+        // 剛掃 SSL(ERL低) → 先往上抽 IRL，過均衡後往 ERL高
+        dolDir := 1
+        if belowEq or nearIrl
+            dolPhase := 1
+            dolTarget := drEq
+        else
+            dolPhase := 2
+            dolTarget := drHi
+    else if lastErlSide > 0
+        // 剛掃 BSL(ERL高) → 先往下抽 IRL，過均衡後往 ERL低
+        dolDir := -1
+        if aboveEq or nearIrl
+            dolPhase := 1
+            dolTarget := drEq
+        else
+            dolPhase := 2
+            dolTarget := drLo
+    else
+        // 尚無掃蕩：依溢價/折價推估下一抽向
+        if aboveEq
+            dolDir := -1
+            dolPhase := 2
+            dolTarget := drLo
+        else if belowEq
+            dolDir := 1
+            dolPhase := 2
+            dolTarget := drHi
+        else
+            dolDir := 0
+            dolPhase := 0
+            dolTarget := drEq
+
+f_dolPathName() =>
+    if not useErlIrl
+        "關閉"
+    else if dolPhase == 1 and dolDir > 0
+        "ERL→IRL 偏多"
+    else if dolPhase == 1 and dolDir < 0
+        "ERL→IRL 偏空"
+    else if dolPhase == 2 and dolDir > 0
+        "IRL→ERL 偏多"
+    else if dolPhase == 2 and dolDir < 0
+        "IRL→ERL 偏空"
+    else
+        "觀望"
+
+f_dolTargetName() =>
+    if not useErlIrl or na(dolTarget)
+        "-"
+    else if dolPhase == 1
+        "IRL均衡 " + f_px(dolTarget)
+    else if dolDir > 0
+        "ERL高 " + f_px(dolTarget)
+    else if dolDir < 0
+        "ERL低 " + f_px(dolTarget)
+    else
+        f_px(dolTarget)
+
+f_dolAllows(bool isBuy) =>
+    if not useErlIrl or not erlIrlFilter
+        true
+    else if dolDir == 0
+        false
+    else
+        isBuy ? dolDir > 0 : dolDir < 0
 
 f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
     float proximal = isBuy ? bot : top
@@ -379,7 +479,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close < bFvgBot
         if timedOut or stopped or fvgBroken
             bPhase := INV
-        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true)
+        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true) and f_dolAllows(true)
             buySignal := true
             buyRR := f_registerSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartBar, bFvgBar, entryTrigger)
             bPhase := ENT
@@ -511,7 +611,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close > sFvgTop
         if timedOut or stopped or fvgBroken
             sPhase := INV
-        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false)
+        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false) and f_dolAllows(false)
             sellSignal := true
             sellRR := f_registerSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             sPhase := ENT
@@ -521,12 +621,17 @@ var line lnE = na
 var line lnR = na
 var line lnT = na
 var line lnT1 = na
+var line lnErlHi = na
+var line lnErlLo = na
+var line lnIrlEq = na
+var line lnDol = na
 var linefill fillRisk = na
 var linefill fillRew = na
 var label labE = na
 var label labR = na
 var label labT = na
 var label labT1 = na
+var label labDol = na
 
 float lastEntry = float(na)
 float lastSl = float(na)
@@ -559,6 +664,14 @@ if barstate.islast
         line.delete(lnT)
     if not na(lnT1)
         line.delete(lnT1)
+    if not na(lnErlHi)
+        line.delete(lnErlHi)
+    if not na(lnErlLo)
+        line.delete(lnErlLo)
+    if not na(lnIrlEq)
+        line.delete(lnIrlEq)
+    if not na(lnDol)
+        line.delete(lnDol)
     if not na(fillRisk)
         linefill.delete(fillRisk)
     if not na(fillRew)
@@ -571,16 +684,34 @@ if barstate.islast
         label.delete(labT)
     if not na(labT1)
         label.delete(labT1)
+    if not na(labDol)
+        label.delete(labDol)
     lnE := na
     lnR := na
     lnT := na
     lnT1 := na
+    lnErlHi := na
+    lnErlLo := na
+    lnIrlEq := na
+    lnDol := na
     fillRisk := na
     fillRew := na
     labE := na
     labR := na
     labT := na
     labT1 := na
+    labDol := na
+
+    if useErlIrl and showDealRange and not na(drHi) and not na(drLo)
+        int xL = math.max(bar_index - dealRangeLen, 0)
+        int xR = bar_index + boxBars
+        lnErlHi := line.new(xL, drHi, xR, drHi, color=color.new(#42a5f5, 0), width=1, style=line.style_dashed, extend=extend.both)
+        lnErlLo := line.new(xL, drLo, xR, drLo, color=color.new(#42a5f5, 0), width=1, style=line.style_dashed, extend=extend.both)
+        lnIrlEq := line.new(xL, drEq, xR, drEq, color=color.new(#ab47bc, 0), width=1, style=line.style_dotted, extend=extend.both)
+        if not na(dolTarget)
+            color dolC = dolDir > 0 ? color.teal : dolDir < 0 ? color.orange : color.gray
+            lnDol := line.new(xL, dolTarget, xR, dolTarget, color=dolC, width=2, extend=extend.both)
+            labDol := label.new(bar_index, dolTarget, f_dolPathName() + " → " + f_dolTargetName(), style=label.style_label_left, color=color.new(dolC, 20), textcolor=color.white, size=size.normal)
 
     if not na(lastEntry) and not na(lastX1) and showLevelLines
         color eC = lastIsBuy ? color.teal : color.orange

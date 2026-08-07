@@ -520,7 +520,7 @@ f_cisdBull() =>
     int run = 0
     for i = 1 to 5
         if close[i] < open[i]
-            run += 1
+            run := run + 1
             maxBearOpen := na(maxBearOpen) ? open[i] : math.max(maxBearOpen, open[i])
         else if run > 0
             break
@@ -531,7 +531,7 @@ f_cisdBear() =>
     int run = 0
     for i = 1 to 5
         if close[i] > open[i]
-            run += 1
+            run := run + 1
             minBullOpen := na(minBullOpen) ? open[i] : math.min(minBullOpen, open[i])
         else if run > 0
             break

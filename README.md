@@ -1,6 +1,8 @@
 # MMXM Entry Detector
 
-ICT **Market Maker Model (MMXM)** 進場偵測：累積 → 掃蕩 → 擴張 → FVG 進場。
+ICT **Market Maker Model (MMXM)** 進場偵測：HTF 偏向 → LTF 累積 → 掃蕩 → 擴張 → FVG 回踩進場。
+
+TradingView 預設為 **ERT 交易系統**（Entry / Risk / Target）：高週期過濾 + 低週期 MMXM 第四階段，圖上標 E / R / T1 / T2。
 
 這個 repo 同時提供 **三種用法**：
 
@@ -15,9 +17,14 @@ ICT **Market Maker Model (MMXM)** 進場偵測：累積 → 掃蕩 → 擴張 �
 ## 1) TradingView 指標
 
 1. 打開 [TradingView Pine Editor](https://www.tradingview.com/)
-2. 貼上 `tradingview/MMXM_Entry_Detector.pine` 內容
+2. 貼上 `tradingview/MMXM_Entry_Detector.pine` 內容（`//@version=6`）
 3. 按 **Add to chart**
-4. 圖上會出現 MMBM / MMSM 三角訊號；可設 Alert
+4. 圖上會出現 MMBM / MMSM（或 ERT 的 E多/E空）訊號；可設 Alert
+
+重點設定見 `tradingview/README.md`：
+- **ERT交易系統** / **MMXM第四階段**
+- **HTF→LTF**：高週期偏向過濾（BOS / 中軸 / EMA）
+- **E / R / T1 / T2** 標示與進場確認方式
 
 ## 2) MT5 指標（不下單）
 
@@ -44,10 +51,12 @@ ICT **Market Maker Model (MMXM)** 進場偵測：累積 → 掃蕩 → 擴張 �
 
 ## Phase logic（共通）
 
+0. **HTF Bias**（TradingView）— 高週期偏向與 LTF 方向一致才允許進場（ERT 預設開啟）  
 1. **Accumulation** — 區間相對 ATR 夠窄，並站穩一段時間  
 2. **Manipulation** — SSL（買）/ BSL（賣）掃蕩  
 3. **Expansion** — 強勢位移並收破累積區間，留下 FVG  
-4. **Wait → Entry** — 等價格回踩 FVG / CE（Phase-4）才出訊號；停損在掃蕩極端外，目標用 measured move  
+4. **Wait → Entry (E)** — 等價格回踩 FVG / CE（Phase-4）才出訊號  
+5. **Risk (R) / Target (T1·T2)** — 停損在掃蕩極端外；T1=部分目標、T2=最終停利  
 
 ## Python（可選）
 

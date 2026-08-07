@@ -117,10 +117,10 @@ if newDay
             lnOrh := na
             lnOrl := na
         if showLevelLbl
-            // 標籤錨在當日 04:45 起點，拖移圖表跟著 K 線走
-            lbPdh := label.new(time, pdh, "R " + str.tostring(pdh, format.mintick), xloc=xloc.bar_time, style=label.style_label_right, color=color.new(color.maroon, 70), textcolor=color.maroon, size=size.small)
-            lbPdl := label.new(time, pdl, "S " + str.tostring(pdl, format.mintick), xloc=xloc.bar_time, style=label.style_label_right, color=color.new(color.teal, 70), textcolor=color.teal, size=size.small)
-            lbDo  := label.new(time, dayOpen, "Open " + str.tostring(dayOpen, format.mintick), xloc=xloc.bar_time, style=label.style_label_right, color=color.new(color.orange, 70), textcolor=color.orange, size=size.small)
+            // 先建立；實際座標在 islast 用可視區右側釘住
+            lbPdh := label.new(time, pdh, "R " + str.tostring(pdh, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(color.maroon, 70), textcolor=color.maroon, size=size.small)
+            lbPdl := label.new(time, pdl, "S " + str.tostring(pdl, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal, size=size.small)
+            lbDo  := label.new(time, dayOpen, "Open " + str.tostring(dayOpen, format.mintick), xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(color.orange, 70), textcolor=color.orange, size=size.small)
 else
     dayHigh := math.max(nz(dayHigh, high), high)
     dayLow := math.min(nz(dayLow, low), low)
@@ -135,8 +135,8 @@ else
                 lnOrh := line.new(t0, orbHigh, time, orbHigh, xloc=xloc.bar_time, extend=extend.none, color=color.aqua, style=line.style_solid, width=1)
                 lnOrl := line.new(t0, orbLow, time, orbLow, xloc=xloc.bar_time, extend=extend.none, color=color.fuchsia, style=line.style_solid, width=1)
 
-// 當日水平線延長到目前K（連續價格線；x 用 bar_time）
-if showLevels
+// 當日水平線延長（歷史K只延長線，不改標籤X）
+if showLevels and not barstate.islast
     if not na(lnPdh)
         line.set_x2(lnPdh, time)
         line.set_y1(lnPdh, pdh)
@@ -166,15 +166,49 @@ if showLevels
         line.set_x2(lnOrl, time)
         line.set_y1(lnOrl, orbLow)
         line.set_y2(lnOrl, orbLow)
-    // 標籤固定在當日起點時間，只更新文字/價格（跟著那根 K 移動）
+
+// 最後一根：線延長 + 標籤釘在可視區右側（拖移圖表會重算並跟著走）
+if showLevels and barstate.islast
+    int tagX = nz(chart.right_visible_bar_time, time)
+    int lineX2 = math.max(time, tagX)
+    int lineX1 = nz(sessStartTime, time)
+    if not na(lnPdh)
+        line.set_xy1(lnPdh, lineX1, pdh)
+        line.set_xy2(lnPdh, lineX2, pdh)
+    if not na(lnPdl)
+        line.set_xy1(lnPdl, lineX1, pdl)
+        line.set_xy2(lnPdl, lineX2, pdl)
+    if not na(lnMid) and not na(pdh) and not na(pdl)
+        float midNow2 = (pdh + pdl) * 0.5
+        line.set_xy1(lnMid, lineX1, midNow2)
+        line.set_xy2(lnMid, lineX2, midNow2)
+    if not na(lnPdc)
+        line.set_xy1(lnPdc, lineX1, pdc)
+        line.set_xy2(lnPdc, lineX2, pdc)
+    if not na(lnDo)
+        line.set_xy1(lnDo, lineX1, dayOpen)
+        line.set_xy2(lnDo, lineX2, dayOpen)
+    if not na(lnOrh)
+        line.set_xy1(lnOrh, lineX1, orbHigh)
+        line.set_xy2(lnOrh, lineX2, orbHigh)
+    if not na(lnOrl)
+        line.set_xy1(lnOrl, lineX1, orbLow)
+        line.set_xy2(lnOrl, lineX2, orbLow)
+
     if showLevelLbl and not na(lbPdh)
-        label.set_y(lbPdh, pdh)
+        label.set_xy(lbPdh, tagX, pdh)
+        label.set_xloc(lbPdh, xloc.bar_time)
+        label.set_yloc(lbPdh, yloc.price)
         label.set_text(lbPdh, "R " + str.tostring(pdh, format.mintick))
     if showLevelLbl and not na(lbPdl)
-        label.set_y(lbPdl, pdl)
+        label.set_xy(lbPdl, tagX, pdl)
+        label.set_xloc(lbPdl, xloc.bar_time)
+        label.set_yloc(lbPdl, yloc.price)
         label.set_text(lbPdl, "S " + str.tostring(pdl, format.mintick))
     if showLevelLbl and not na(lbDo)
-        label.set_y(lbDo, dayOpen)
+        label.set_xy(lbDo, tagX, dayOpen)
+        label.set_xloc(lbDo, xloc.bar_time)
+        label.set_yloc(lbDo, yloc.price)
         label.set_text(lbDo, "Open " + str.tostring(dayOpen, format.mintick))
 
 float mid = not na(pdh) and not na(pdl) ? (pdh + pdl) * 0.5 : na
@@ -302,7 +336,7 @@ plotshape(showBuy and buySignal, title="Buy", style=shape.triangleup, location=l
 plotshape(showSell and sellSignal, title="Sell", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
 
 if buySignal or sellSignal
-    label.new(time, buySignal ? low : high, sigType, xloc=xloc.bar_time, style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.tiny)
+    label.new(time, buySignal ? low : high, sigType, xloc=xloc.bar_time, yloc=yloc.price, style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.tiny)
 
 alertcondition(buySignal, "OHLC Buy", "Intraday OHLC buy signal")
 alertcondition(sellSignal, "OHLC Sell", "Intraday OHLC sell signal")

@@ -561,6 +561,11 @@ color eCol = rrOn ? (rrIsBuy ? color.teal : color.orange) : color.new(color.gray
 color rCol = rrOn ? color.red : color.new(color.gray, 100)
 color tCol = rrOn ? color.lime : color.new(color.gray, 100)
 color t1Col = rrOn and (showTP1 or isErtMode or ertLabels) ? color.new(color.yellow, 30) : color.new(color.gray, 100)
+
+plotE = plot(showLevelLines and rrOn ? rrEntry : na, title="E進場", color=eCol, linewidth=2, style=plot.style_linebr)
+plotR = plot(showLevelLines and rrOn ? rrSl : na, title="R停損", color=rCol, linewidth=2, style=plot.style_linebr)
+plotT = plot(showLevelLines and rrOn ? rrTp : na, title="T2停利", color=tCol, linewidth=2, style=plot.style_linebr)
+plotT1 = plot((showTP1 or isErtMode or ertLabels) and rrOn ? rrT1 : na, title="T1", color=t1Col, linewidth=1, style=plot.style_linebr)
 fill(plotE, plotR, title="風險區R", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRiskCol : sellRiskCol) : na)
 fill(plotE, plotT, title="目標區T", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRewardCol : sellRewardCol) : na)
 

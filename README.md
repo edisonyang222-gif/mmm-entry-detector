@@ -44,10 +44,10 @@ ICT **Market Maker Model (MMXM)** 進場偵測：累積 → 掃蕩 → 擴張 �
 
 ## Phase logic（共通）
 
-1. **Accumulation** — 區間相對 ATR 夠窄  
+1. **Accumulation** — 區間相對 ATR 夠窄，並站穩一段時間  
 2. **Manipulation** — SSL（買）/ BSL（賣）掃蕩  
-3. **Expansion** — 強勢位移並收破累積區間  
-4. **Entry** — 位移腿 FVG；停損在掃蕩極端外；目標用 measured move  
+3. **Expansion** — 強勢位移並收破累積區間，留下 FVG  
+4. **Wait → Entry** — 等價格回踩 FVG / CE（Phase-4）才出訊號；停損在掃蕩極端外，目標用 measured move  
 
 ## Python（可選）
 

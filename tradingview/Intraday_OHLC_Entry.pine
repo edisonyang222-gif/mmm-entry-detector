@@ -1,0 +1,209 @@
+//@version=5
+indicator("Intraday OHLC Entry", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// --- Inputs ---
+mode          = input.string("ALL", "Mode", options=["BREAKOUT", "REJECTION", "OPEN", "ALL"])
+sessionHour   = input.int(0, "Session day start hour", minval=0, maxval=23)
+orbBars       = input.int(4, "Opening range bars", minval=1)
+atrLen        = input.int(14, "ATR period")
+touchTolAtr   = input.float(0.05, "Touch tolerance (ATR)", step=0.01)
+minBreakAtr   = input.float(0.02, "Min break (ATR)", step=0.01)
+rejectBody    = input.float(0.45, "Rejection body/range", step=0.05)
+stopAtrMult   = input.float(0.8, "Stop ATR mult", step=0.1)
+minRR         = input.float(1.5, "Min RR", step=0.1)
+tpRR          = input.float(2.0, "TP RR", step=0.1)
+useLevelTP    = input.bool(true, "Prefer OHLC level TP")
+onePerDay     = input.bool(true, "One signal per day per side")
+showBuy       = input.bool(true, "Show buy")
+showSell      = input.bool(true, "Show sell")
+showLevels    = input.bool(true, "Show PDH/PDL/Open/ORB")
+
+enableBO  = mode == "BREAKOUT" or mode == "ALL"
+enableREJ = mode == "REJECTION" or mode == "ALL"
+enableOPN = mode == "OPEN" or mode == "ALL"
+enableORB = mode == "BREAKOUT" or mode == "ALL"
+
+atr = ta.atr(atrLen)
+
+// Session day key (server/exchange time of chart)
+dayStart = timestamp(year, month, dayofmonth, sessionHour, 0)
+sessKey  = hour < sessionHour ? dayStart - 86400000 : dayStart
+newDay   = ta.change(sessKey) != 0
+
+var float pdh = na
+var float pdl = na
+var float pdo = na
+var float pdc = na
+var float dayOpen = na
+var float dayHigh = na
+var float dayLow = na
+var float orbHigh = na
+var float orbLow = na
+var int   barsInDay = 0
+var bool  orbReady = false
+var int   lastBuyDay = na
+var int   lastSellDay = na
+
+if newDay
+    pdh := dayHigh
+    pdl := dayLow
+    pdo := dayOpen
+    pdc := close[1]
+    dayOpen := open
+    dayHigh := high
+    dayLow := low
+    orbHigh := high
+    orbLow := low
+    barsInDay := 1
+    orbReady := orbBars <= 1
+else
+    dayHigh := math.max(nz(dayHigh, high), high)
+    dayLow := math.min(nz(dayLow, low), low)
+    barsInDay += 1
+    if not orbReady
+        orbHigh := math.max(nz(orbHigh, high), high)
+        orbLow := math.min(nz(orbLow, low), low)
+        if barsInDay >= orbBars
+            orbReady := true
+
+mid = not na(pdh) and not na(pdl) ? (pdh + pdl) * 0.5 : na
+levelsReady = not na(pdh) and not na(pdl)
+
+tol = touchTolAtr * atr
+brk = minBreakAtr * atr
+rng = high - low
+body = math.abs(close - open)
+earlyBar = barsInDay <= 1
+dayId = int(sessKey / 1000)
+
+allowBuy  = not onePerDay or lastBuyDay != dayId
+allowSell = not onePerDay or lastSellDay != dayId
+
+f_plan(sideIsBuy, entry, level, structural) =>
+    stopDist = stopAtrMult * atr
+    stop = sideIsBuy ? entry - stopDist : entry + stopDist
+    tp = na
+    if useLevelTP and not na(structural)
+        if sideIsBuy and structural > entry
+            tp := structural
+        if not sideIsBuy and structural < entry
+            tp := structural
+    risk = math.abs(entry - stop)
+    if na(tp) or (sideIsBuy ? tp <= entry : tp >= entry)
+        tp := sideIsBuy ? entry + tpRR * risk : entry - tpRR * risk
+    rr = risk > 0 ? math.abs(tp - entry) / risk : 0.0
+    if rr < minRR
+        tp := sideIsBuy ? entry + tpRR * risk : entry - tpRR * risk
+        rr := risk > 0 ? math.abs(tp - entry) / risk : 0.0
+    [rr >= minRR, stop, tp, rr]
+
+var string sigType = ""
+buySignal = false
+sellSignal = false
+var float sigEntry = na
+var float sigSL = na
+var float sigTP = na
+
+if barstate.isconfirmed and levelsReady and atr > 0 and not earlyBar
+    // PDH breakout
+    if enableBO and allowBuy and close[1] <= pdh + tol and close > pdh + brk
+        meas = close + (pdh - pdl)
+        [ok, sl, tp, rr] = f_plan(true, close, pdh, meas)
+        if ok
+            buySignal := true
+            sigType := "PDH_BO"
+            sigEntry := close
+            sigSL := sl
+            sigTP := tp
+            lastBuyDay := dayId
+    // PDL breakout
+    if not buySignal and enableBO and allowSell and close[1] >= pdl - tol and close < pdl - brk
+        meas = close - (pdh - pdl)
+        [ok, sl, tp, rr] = f_plan(false, close, pdl, meas)
+        if ok
+            sellSignal := true
+            sigType := "PDL_BO"
+            sigEntry := close
+            sigSL := sl
+            sigTP := tp
+            lastSellDay := dayId
+    // Open cross
+    if not buySignal and not sellSignal and enableOPN
+        if allowBuy and close[1] <= dayOpen + tol and close > dayOpen + brk
+            struct = mid > close ? mid : pdh
+            [ok, sl, tp, rr] = f_plan(true, close, dayOpen, struct)
+            if ok
+                buySignal := true
+                sigType := "OPEN_BUY"
+                sigEntry := close
+                sigSL := sl
+                sigTP := tp
+                lastBuyDay := dayId
+        if not buySignal and allowSell and close[1] >= dayOpen - tol and close < dayOpen - brk
+            struct = mid < close ? mid : pdl
+            [ok, sl, tp, rr] = f_plan(false, close, dayOpen, struct)
+            if ok
+                sellSignal := true
+                sigType := "OPEN_SELL"
+                sigEntry := close
+                sigSL := sl
+                sigTP := tp
+                lastSellDay := dayId
+    // Rejection
+    if not buySignal and not sellSignal and enableREJ and rng > 0 and body / rng >= rejectBody
+        if allowSell and high >= pdh - tol and close < pdh - brk and close < open
+            struct = mid < close ? mid : pdl
+            [ok, sl, tp, rr] = f_plan(false, close, pdh, struct)
+            if ok
+                sellSignal := true
+                sigType := "PDH_REJ"
+                sigEntry := close
+                sigSL := sl
+                sigTP := tp
+                lastSellDay := dayId
+        if not sellSignal and allowBuy and low <= pdl + tol and close > pdl + brk and close > open
+            struct = mid > close ? mid : pdh
+            [ok, sl, tp, rr] = f_plan(true, close, pdl, struct)
+            if ok
+                buySignal := true
+                sigType := "PDL_REJ"
+                sigEntry := close
+                sigSL := sl
+                sigTP := tp
+                lastBuyDay := dayId
+    // ORB
+    if not buySignal and not sellSignal and enableORB and orbReady and barsInDay > orbBars
+        if allowBuy and close[1] <= orbHigh + tol and close > orbHigh + brk
+            [ok, sl, tp, rr] = f_plan(true, close, orbHigh, pdh)
+            if ok
+                buySignal := true
+                sigType := "ORB_BUY"
+                sigEntry := close
+                sigSL := sl
+                sigTP := tp
+                lastBuyDay := dayId
+        if not buySignal and allowSell and close[1] >= orbLow - tol and close < orbLow - brk
+            [ok, sl, tp, rr] = f_plan(false, close, orbLow, pdl)
+            if ok
+                sellSignal := true
+                sigType := "ORB_SELL"
+                sigEntry := close
+                sigSL := sl
+                sigTP := tp
+                lastSellDay := dayId
+
+plotshape(showBuy and buySignal, title="Buy", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="B")
+plotshape(showSell and sellSignal, title="Sell", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
+
+plot(showLevels and levelsReady ? pdh : na, "PDH", color=color.teal, style=plot.style_linebr)
+plot(showLevels and levelsReady ? pdl : na, "PDL", color=color.maroon, style=plot.style_linebr)
+plot(showLevels and levelsReady ? mid : na, "MID", color=color.gray, style=plot.style_linebr)
+plot(showLevels ? dayOpen : na, "DayOpen", color=color.orange, style=plot.style_linebr, linewidth=2)
+plot(showLevels and orbReady ? orbHigh : na, "ORH", color=color.aqua, style=plot.style_linebr)
+plot(showLevels and orbReady ? orbLow : na, "ORL", color=color.fuchsia, style=plot.style_linebr)
+
+if buySignal or sellSignal
+    label.new(bar_index, buySignal ? low : high, sigType, style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.tiny)
+
+alertcondition(buySignal, "OHLC Buy", "Intraday OHLC buy signal")
+alertcondition(sellSignal, "OHLC Sell", "Intraday OHLC sell signal")

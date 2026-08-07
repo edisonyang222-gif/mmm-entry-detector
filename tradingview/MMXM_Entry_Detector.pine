@@ -165,19 +165,13 @@ f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
         result := oteInFvg ? ote : mid
     result
 
-// 盈虧區改用 plot/fill（跟K線同一座標系，捲動必跟著走）
-// box/line 在部分情況下會看起來「留在原地」
+// 盈虧顯示：畫面固定用「水平價位線 + linefill + 右上表格」
+// （不用 box/label 貼在進場K上，移動圖表時不會跟蠟燭分離）
 type TradeSetup
     int x1
     float entry
     float sl
     float tp
-    float fvgTop
-    float fvgBot
-    float accHi
-    float accLo
-    int accStart
-    int fvgBar
     bool isBuy
     string modeTxt
 
@@ -187,25 +181,9 @@ f_registerSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float
     float risk = math.abs(entry - sl)
     float reward = math.abs(tp - entry)
     float rr = risk > 0.0 ? reward / risk : 0.0
-    array.push(trades, TradeSetup.new(bar_index, entry, sl, tp, fvgTop, fvgBot, accHi, accLo, accStartBar, fvgBar, isBuy, modeTxt))
+    array.push(trades, TradeSetup.new(bar_index, entry, sl, tp, isBuy, modeTxt))
     if array.size(trades) > 40
         array.shift(trades)
-
-    // 結構框：用 chart.point 綁定 bar index（可關）
-    if showAccBox and not na(accHi) and not na(accLo)
-        int ax1 = na(accStartBar) ? math.max(bar_index - lookback, 0) : accStartBar
-        box.new(chart.point.from_index(ax1, accHi), chart.point.from_index(bar_index, accLo), border_color=color.new(#ab47bc, 40), border_width=1, bgcolor=accCol, text="累積", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
-    if showFvgBox and not na(fvgTop) and not na(fvgBot)
-        int fx1 = na(fvgBar) ? math.max(bar_index - 2, 0) : fvgBar
-        int fx2 = bar_index + boxBars
-        box.new(chart.point.from_index(fx1, fvgTop), chart.point.from_index(fx2, fvgBot), border_color=color.new(#42a5f5, 30), border_width=1, bgcolor=fvgCol, text="失衡區FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
-
-    bool useErtDraw = isErtMode or ertLabels
-    string sideTxt = isBuy ? "作多 MMBM" : "作空 MMSM"
-    color entryC = isBuy ? color.teal : color.orange
-    string htfLine = htfFilterOn ? "\nHTF " + f_htfName(htfBias) : ""
-    string body = sideTxt + "\n模型 " + entryModel + "\n確認 " + modeTxt + htfLine + "\n" + (useErtDraw ? "E " : "進場 ") + f_px(entry) + "\n" + (useErtDraw ? "R " : "停損 ") + f_px(sl) + "\n" + (useErtDraw ? "T2 " : "停利 ") + f_px(tp) + "\n報酬比 1:" + str.tostring(rr, "#.##")
-    label.new(chart.point.from_index(bar_index, sl), body, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
     rr
 
 f_entryConfirmed(bool isBuy, float entry, float fvgTop, float fvgBot) =>
@@ -538,11 +516,92 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
             sellRR := f_registerSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             sPhase := ENT
 
-// ---- 盈虧區：plot/fill 綁在每根K線上，移動圖表一定跟著走 ----
+// ---- 畫面固定：最新一筆 E/R/T 畫成橫貫價位線 + 色帶（移動圖表仍看得到）----
+var line lnE = na
+var line lnR = na
+var line lnT = na
+var line lnT1 = na
+var linefill fillRisk = na
+var linefill fillRew = na
+var label labE = na
+var label labR = na
+var label labT = na
+var label labT1 = na
+
+float lastEntry = float(na)
+float lastSl = float(na)
+float lastTp = float(na)
+float lastT1 = float(na)
+float lastRr = float(na)
+bool lastIsBuy = false
+int lastX1 = na
+string lastSide = "-"
+
+if array.size(trades) > 0
+    TradeSetup lastT = array.get(trades, array.size(trades) - 1)
+    lastEntry := lastT.entry
+    lastSl := lastT.sl
+    lastTp := lastT.tp
+    float lastRisk = math.abs(lastT.entry - lastT.sl)
+    lastT1 := lastT.isBuy ? lastT.entry + lastRisk * ertT1RR : lastT.entry - lastRisk * ertT1RR
+    lastRr := lastRisk > 0.0 ? math.abs(lastT.tp - lastT.entry) / lastRisk : float(na)
+    lastIsBuy := lastT.isBuy
+    lastX1 := lastT.x1
+    lastSide := lastT.isBuy ? "作多" : "作空"
+
+if barstate.islast
+    // 刪掉舊線再建，避免殘留
+    if not na(lnE)
+        line.delete(lnE)
+    if not na(lnR)
+        line.delete(lnR)
+    if not na(lnT)
+        line.delete(lnT)
+    if not na(lnT1)
+        line.delete(lnT1)
+    if not na(fillRisk)
+        linefill.delete(fillRisk)
+    if not na(fillRew)
+        linefill.delete(fillRew)
+    if not na(labE)
+        label.delete(labE)
+    if not na(labR)
+        label.delete(labR)
+    if not na(labT)
+        label.delete(labT)
+    if not na(labT1)
+        label.delete(labT1)
+    lnE := na
+    lnR := na
+    lnT := na
+    lnT1 := na
+    fillRisk := na
+    fillRew := na
+    labE := na
+    labR := na
+    labT := na
+    labT1 := na
+
+    if not na(lastEntry) and not na(lastX1) and showLevelLines
+        color eC = lastIsBuy ? color.teal : color.orange
+        int xRight = bar_index + boxBars
+        lnE := line.new(lastX1, lastEntry, xRight, lastEntry, color=eC, width=2, extend=extend.right)
+        lnR := line.new(lastX1, lastSl, xRight, lastSl, color=color.red, width=2, style=line.style_dashed, extend=extend.right)
+        lnT := line.new(lastX1, lastTp, xRight, lastTp, color=color.lime, width=2, style=line.style_dashed, extend=extend.right)
+        if showTP1 or isErtMode or ertLabels
+            lnT1 := line.new(lastX1, lastT1, xRight, lastT1, color=color.new(color.yellow, 20), width=1, style=line.style_dotted, extend=extend.right)
+            labT1 := label.new(bar_index, lastT1, "T1 " + f_px(lastT1), style=label.style_label_left, color=color.new(color.yellow, 70), textcolor=color.black, size=size.small)
+        if showRrBoxes
+            fillRisk := linefill.new(lnE, lnR, lastIsBuy ? buyRiskCol : sellRiskCol)
+            fillRew := linefill.new(lnE, lnT, lastIsBuy ? buyRewardCol : sellRewardCol)
+        labE := label.new(bar_index, lastEntry, (isErtMode or ertLabels ? "E " : "進場 ") + f_px(lastEntry), style=label.style_label_left, color=color.new(eC, 20), textcolor=color.white, size=size.normal)
+        labR := label.new(bar_index, lastSl, (isErtMode or ertLabels ? "R " : "停損 ") + f_px(lastSl), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.normal)
+        labT := label.new(bar_index, lastTp, (isErtMode or ertLabels ? "T2 " : "停利 ") + f_px(lastTp), style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.normal)
+
+// 進場當根附近也留一段 plot 色帶（跟K線）
 float rrEntry = float(na)
 float rrSl = float(na)
 float rrTp = float(na)
-float rrT1 = float(na)
 bool rrOn = false
 bool rrIsBuy = false
 if array.size(trades) > 0
@@ -552,72 +611,67 @@ if array.size(trades) > 0
             rrEntry := t.entry
             rrSl := t.sl
             rrTp := t.tp
-            float risk = math.abs(t.entry - t.sl)
-            rrT1 := t.isBuy ? t.entry + risk * ertT1RR : t.entry - risk * ertT1RR
             rrOn := true
             rrIsBuy := t.isBuy
 
-color eCol = rrOn ? (rrIsBuy ? color.teal : color.orange) : color.new(color.gray, 100)
-color rCol = rrOn ? color.red : color.new(color.gray, 100)
-color tCol = rrOn ? color.lime : color.new(color.gray, 100)
-color t1Col = rrOn and (showTP1 or isErtMode or ertLabels) ? color.new(color.yellow, 30) : color.new(color.gray, 100)
+plotE = plot(showRrBoxes and rrOn ? rrEntry : na, title="E區", color=color.new(color.teal, 100), style=plot.style_linebr)
+plotR = plot(showRrBoxes and rrOn ? rrSl : na, title="R區", color=color.new(color.red, 100), style=plot.style_linebr)
+plotT = plot(showRrBoxes and rrOn ? rrTp : na, title="T區", color=color.new(color.lime, 100), style=plot.style_linebr)
+fill(plotE, plotR, title="風險區", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRiskCol : sellRiskCol) : na)
+fill(plotE, plotT, title="目標區", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRewardCol : sellRewardCol) : na)
 
-plotE = plot(showLevelLines and rrOn ? rrEntry : na, title="E進場", color=eCol, linewidth=2, style=plot.style_linebr)
-plotR = plot(showLevelLines and rrOn ? rrSl : na, title="R停損", color=rCol, linewidth=2, style=plot.style_linebr)
-plotT = plot(showLevelLines and rrOn ? rrTp : na, title="T2停利", color=tCol, linewidth=2, style=plot.style_linebr)
-plotT1 = plot((showTP1 or isErtMode or ertLabels) and rrOn ? rrT1 : na, title="T1", color=t1Col, linewidth=1, style=plot.style_linebr)
-fill(plotE, plotR, title="風險區R", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRiskCol : sellRiskCol) : na)
-fill(plotE, plotT, title="目標區T", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRewardCol : sellRewardCol) : na)
-
-// 等待回踩：用背景色（跟著K線），不用會漂的 box
 bgcolor(showPending and bPhase == WAIT ? color.new(#ffca28, 88) : na, title="等待作多回踩")
 bgcolor(showPending and sPhase == WAIT ? color.new(#ffb300, 88) : na, title="等待作空回踩")
 
-// plotshape text must be const string (CE10123) — split by mode
 plotshape(showMarkers and showBuy and buySignal and isErtMode, title="ERT作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="E多")
 plotshape(showMarkers and showBuy and buySignal and not isErtMode, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="作多")
 plotshape(showMarkers and showSell and sellSignal and isErtMode, title="ERT作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="E空")
 plotshape(showMarkers and showSell and sellSignal and not isErtMode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="作空")
 
-var table info = table.new(position.top_right, 2, 14, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
+// 右上表格 = 真正畫面固定（捲動也不會跑）
+var table info = table.new(position.top_right, 2, 16, bgcolor=color.new(#111111, 20), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
-    table.cell(info, 0, 0, "進場模型", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 0, entryModel, text_color=color.aqua, text_size=size.small)
-    table.cell(info, 0, 1, "HTF偏向", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 0, "ERT畫面固定", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, lastSide, text_color=lastIsBuy ? color.teal : color.orange, text_size=size.small)
+    table.cell(info, 0, 1, "E 進場", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 1, 1, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 2, "R 停損", text_color=color.red, text_size=size.small)
+    table.cell(info, 1, 2, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 3, "T1", text_color=color.yellow, text_size=size.small)
+    table.cell(info, 1, 3, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 4, "T2 停利", text_color=color.lime, text_size=size.small)
+    table.cell(info, 1, 4, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 5, "報酬比", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 5, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
+    table.cell(info, 0, 6, "模型", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 6, entryModel, text_color=color.aqua, text_size=size.tiny)
+    table.cell(info, 0, 7, "HTF偏向", text_color=color.gray, text_size=size.tiny)
     color htfCol = htfBias > 0 ? color.teal : htfBias < 0 ? color.orange : color.gray
     string htfTxt = htfFilterOn ? f_htfName(htfBias) + " (" + (htfTf == "" ? "自動" : htfTf) + ")" : "關閉"
-    table.cell(info, 1, 1, htfTxt, text_color=htfCol, text_size=size.tiny)
-    table.cell(info, 0, 2, "確認方式", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 2, entryTrigger, text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 3, "進場價", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 3, entryFill, text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 4, "停利/T2", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 4, tpMode + " 1:" + str.tostring(targetRR, "#.#"), text_color=color.lime, text_size=size.tiny)
-    table.cell(info, 0, 5, "作多階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 5, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 6, "作空階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 6, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 7, "作多等待E", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 7, htfTxt, text_color=htfCol, text_size=size.tiny)
+    table.cell(info, 0, 8, "確認方式", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 8, entryTrigger, text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 9, "作多階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 9, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 10, "作空階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 10, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 11, "作多等待E", text_color=color.gray, text_size=size.tiny)
     string bWait = bPhase == WAIT and not na(bEntry) ? f_px(bEntry) + (f_htfAllows(true) ? "" : "·等HTF") : "-"
-    table.cell(info, 1, 7, bWait, text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 8, "作空等待E", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 11, bWait, text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 12, "作空等待E", text_color=color.gray, text_size=size.tiny)
     string sWait = sPhase == WAIT and not na(sEntry) ? f_px(sEntry) + (f_htfAllows(false) ? "" : "·等HTF") : "-"
-    table.cell(info, 1, 8, sWait, text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 9, "區間收斂", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 9, candTight ? "是" : "否", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
-    table.cell(info, 0, 10, "最近作多RR", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 10, not na(buyRR) ? "1:" + str.tostring(buyRR, "#.##") : "-", text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 11, "最近作空RR", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 11, not na(sellRR) ? "1:" + str.tostring(sellRR, "#.##") : "-", text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 1, 12, sWait, text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 13, "區間收斂", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 13, candTight ? "是" : "否", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
     if showErtChecklist
-        bool ertE = (bPhase == WAIT or sPhase == WAIT or buySignal or sellSignal)
-        bool ertR = (bPhase == WAIT and not na(bSL)) or (sPhase == WAIT and not na(sSL)) or not na(buyRR) or not na(sellRR)
-        bool ertT = ertR
+        bool ertE = not na(lastEntry) or bPhase == WAIT or sPhase == WAIT
+        bool ertR = not na(lastSl) or (bPhase == WAIT and not na(bSL)) or (sPhase == WAIT and not na(sSL))
+        bool ertT = not na(lastTp)
         bool ertH = f_htfAllows(true) or f_htfAllows(false) or not htfFilterOn
-        table.cell(info, 0, 12, "ERT清單", text_color=color.white, text_size=size.tiny)
-        table.cell(info, 1, 12, "E" + (ertE ? "✓" : "·") + " R" + (ertR ? "✓" : "·") + " T" + (ertT ? "✓" : "·"), text_color=color.aqua, text_size=size.tiny)
-        table.cell(info, 0, 13, "HTF過濾", text_color=color.gray, text_size=size.tiny)
-        table.cell(info, 1, 13, htfFilterOn ? (ertH ? "通過/就緒" : "阻擋反向") : "未啟用", text_color=htfFilterOn ? color.lime : color.gray, text_size=size.tiny)
+        table.cell(info, 0, 14, "ERT清單", text_color=color.white, text_size=size.tiny)
+        table.cell(info, 1, 14, "E" + (ertE ? "✓" : "·") + " R" + (ertR ? "✓" : "·") + " T" + (ertT ? "✓" : "·"), text_color=color.aqua, text_size=size.tiny)
+        table.cell(info, 0, 15, "HTF過濾", text_color=color.gray, text_size=size.tiny)
+        table.cell(info, 1, 15, htfFilterOn ? (ertH ? "通過/就緒" : "阻擋反向") : "未啟用", text_color=htfFilterOn ? color.lime : color.gray, text_size=size.tiny)
 
 alertcondition(buySignal, "作多進場", "ICT MMXM/ERT 作多進場")
 alertcondition(sellSignal, "作空進場", "ICT MMXM/ERT 作空進場")

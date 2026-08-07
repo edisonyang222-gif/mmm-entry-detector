@@ -51,18 +51,6 @@ biasColor(int b) =>
 ph = ta.pivothigh(high, swingLen, swingLen)
 pl = ta.pivotlow(low, swingLen, swingLen)
 
-var float sh1 = na
-var float sh2 = na
-var float sl1 = na
-var float sl2 = na
-
-if not na(ph)
-    sh2 := sh1
-    sh1 := ph
-if not na(pl)
-    sl2 := sl1
-    sl1 := pl
-
 // 各時框獨立計算偏向（供 request.security 使用，避免吃到圖表全域狀態）
 tfBias() =>
     pHi = ta.pivothigh(high, swingLen, swingLen)

@@ -208,10 +208,14 @@ void UpdatePanel(const BiasSnapshot &bias, const LiquidityState &liqLive,
    y += line;
 
    string arm = "設置狀態：";
-   if(setupBuyArmed)
-      arm += "偏多回踩監控中";
+   if(setupBuyArmed && g_mem.lowLeftZone)
+      arm += "偏多｜已離開，等待回踩支撐";
+   else if(setupBuyArmed)
+      arm += "偏多｜已掃除，等待離開後回踩";
+   else if(setupSellArmed && g_mem.highLeftZone)
+      arm += "偏空｜已離開，等待回踩阻力";
    else if(setupSellArmed)
-      arm += "偏空回踩監控中";
+      arm += "偏空｜已掃除，等待離開後回踩";
    else
       arm += "等待流動性掃除";
    PanelSet("OHLCST_T11", x, y, arm, clrAqua, fs);

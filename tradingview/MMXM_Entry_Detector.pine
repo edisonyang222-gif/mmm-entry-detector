@@ -1,43 +1,43 @@
 //@version=6
-indicator("MMXM Entry Detector", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+indicator("MMXM 進場偵測器", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
 // ICT Market Maker Model — more conservative detection
 // Timezone-independent (OHLC only). Entry waits for Phase-4 FVG retrace.
 // Note: Pine forbids modifying globals inside functions (CE10088), so resets are inlined.
 
-int   lookback        = input.int(20, "Accumulation Lookback", minval=5, group="Detection")
-int   minAccBars      = input.int(5, "Min Bars In Accumulation", minval=2, group="Detection")
-int   atrPeriod       = input.int(14, "ATR Period", minval=1, group="Detection")
-float maxRangeAtrMult = input.float(2.5, "Max Range ATR Mult", minval=0.5, step=0.1, group="Detection")
-float manipAtrMult    = input.float(0.25, "Min Sweep Beyond Range (ATR)", minval=0.0, step=0.05, group="Detection")
-float minSweepOfRange = input.float(0.15, "Min Sweep / Range Width", minval=0.0, step=0.05, group="Detection")
-float dispBodyRatio   = input.float(0.55, "Displacement Body Ratio", minval=0.1, maxval=1.0, step=0.05, group="Detection")
-float dispAtrMult     = input.float(0.9, "Displacement ATR Mult", minval=0.1, step=0.1, group="Detection")
-float minRR           = input.float(2.0, "Min Risk/Reward", minval=0.5, step=0.1, group="Detection")
-float stopBufAtrMult  = input.float(0.05, "Stop Buffer ATR Mult", minval=0.0, step=0.01, group="Detection")
-string entryFill      = input.string("midpoint", "Entry Fill (CE)", options=["midpoint", "proximal"], group="Detection")
-int   maxWaitBars     = input.int(20, "Max Bars Wait For Retrace", minval=3, group="Detection")
-bool  requireCloseBack= input.bool(true, "Require Close Back Inside FVG Side", group="Detection")
-bool  requireMss      = input.bool(true, "Require MSS (close through range)", group="Detection")
+int   lookback        = input.int(20, "累積區間回看根數", minval=5, group="偵測設定")
+int   minAccBars      = input.int(5, "最少累積根數", minval=2, group="偵測設定")
+int   atrPeriod       = input.int(14, "ATR 週期", minval=1, group="偵測設定")
+float maxRangeAtrMult = input.float(2.5, "最大區間寬度（×ATR）", minval=0.5, step=0.1, group="偵測設定")
+float manipAtrMult    = input.float(0.25, "最少掃蕩深度（×ATR）", minval=0.0, step=0.05, group="偵測設定")
+float minSweepOfRange = input.float(0.15, "最少掃蕩深度（佔區間比例）", minval=0.0, step=0.05, group="偵測設定")
+float dispBodyRatio   = input.float(0.55, "位移K線實體比例", minval=0.1, maxval=1.0, step=0.05, group="偵測設定")
+float dispAtrMult     = input.float(0.9, "位移K線最小幅度（×ATR）", minval=0.1, step=0.1, group="偵測設定")
+float minRR           = input.float(2.0, "最小風險報酬比", minval=0.5, step=0.1, group="偵測設定")
+float stopBufAtrMult  = input.float(0.05, "停損緩衝（×ATR）", minval=0.0, step=0.01, group="偵測設定")
+string entryFill      = input.string("中點", "進場價位（FVG）", options=["中點", "近端"], group="偵測設定")
+int   maxWaitBars     = input.int(20, "最多等待回踩根數", minval=3, group="偵測設定")
+bool  requireCloseBack= input.bool(true, "回踩後需收回到FVG側", group="偵測設定")
+bool  requireMss      = input.bool(true, "需要結構突破（收破區間）", group="偵測設定")
 
-bool  showBuy         = input.bool(true, "Show Buy Model (MMBM)", group="Display")
-bool  showSell        = input.bool(true, "Show Sell Model (MMSM)", group="Display")
-bool  showRrBoxes     = input.bool(true, "Show Risk/Reward Boxes", group="Display")
-bool  showLevelLines  = input.bool(true, "Show Entry / SL / TP Lines", group="Display")
-bool  showFvgBox      = input.bool(true, "Show FVG Box", group="Display")
-bool  showAccBox      = input.bool(true, "Show Accumulation Box", group="Display")
-bool  showPending     = input.bool(true, "Show Pending Setup (waiting tap)", group="Display")
-bool  showMarkers     = input.bool(true, "Show Entry Markers", group="Display")
-bool  showInfoTable   = input.bool(true, "Show Info Table", group="Display")
-int   boxBars         = input.int(25, "Box / Line Width (bars)", minval=5, maxval=200, group="Display")
+bool  showBuy         = input.bool(true, "顯示作多模型（MMBM）", group="顯示設定")
+bool  showSell        = input.bool(true, "顯示作空模型（MMSM）", group="顯示設定")
+bool  showRrBoxes     = input.bool(true, "顯示盈虧方塊", group="顯示設定")
+bool  showLevelLines  = input.bool(true, "顯示進場/停損/停利線", group="顯示設定")
+bool  showFvgBox      = input.bool(true, "顯示 FVG 框", group="顯示設定")
+bool  showAccBox      = input.bool(true, "顯示累積區間框", group="顯示設定")
+bool  showPending     = input.bool(true, "顯示等待回踩框", group="顯示設定")
+bool  showMarkers     = input.bool(true, "顯示進場標記", group="顯示設定")
+bool  showInfoTable   = input.bool(true, "顯示右上狀態表", group="顯示設定")
+int   boxBars         = input.int(25, "方塊/線段延伸根數", minval=5, maxval=200, group="顯示設定")
 
-color buyRiskCol    = input.color(color.new(#ef5350, 75), "Buy Risk Box", group="Colors")
-color buyRewardCol  = input.color(color.new(#26a69a, 75), "Buy Reward Box", group="Colors")
-color sellRiskCol   = input.color(color.new(#ef5350, 75), "Sell Risk Box", group="Colors")
-color sellRewardCol = input.color(color.new(#26a69a, 75), "Sell Reward Box", group="Colors")
-color fvgCol        = input.color(color.new(#42a5f5, 80), "FVG Box", group="Colors")
-color accCol        = input.color(color.new(#ab47bc, 88), "Accumulation Box", group="Colors")
-color pendingCol    = input.color(color.new(#ffca28, 85), "Pending Box", group="Colors")
+color buyRiskCol    = input.color(color.new(#ef5350, 75), "作多風險區顏色", group="顏色")
+color buyRewardCol  = input.color(color.new(#26a69a, 75), "作多獲利區顏色", group="顏色")
+color sellRiskCol   = input.color(color.new(#ef5350, 75), "作空風險區顏色", group="顏色")
+color sellRewardCol = input.color(color.new(#26a69a, 75), "作空獲利區顏色", group="顏色")
+color fvgCol        = input.color(color.new(#42a5f5, 80), "FVG 框顏色", group="顏色")
+color accCol        = input.color(color.new(#ab47bc, 88), "累積框顏色", group="顏色")
+color pendingCol    = input.color(color.new(#ffca28, 85), "等待回踩框顏色", group="顏色")
 
 float atrVal = ta.atr(atrPeriod)
 
@@ -51,13 +51,13 @@ int INV  = 6
 
 f_phaseName(int p) =>
     switch p
-        ACC => "Accumulation"
-        MAN => "Manipulation"
-        EXP => "Expansion"
-        WAIT => "Wait Retrace"
-        ENT => "Entry"
-        INV => "Invalidated"
-        => "Idle"
+        ACC => "累積中"
+        MAN => "掃蕩中"
+        EXP => "擴張中"
+        WAIT => "等待回踩"
+        ENT => "已進場"
+        INV => "已失效"
+        => "待機"
 
 f_isDisp(bool bull) =>
     float rng = high - low
@@ -86,7 +86,7 @@ f_bearFvgBot() =>
 f_entryLevel(bool isBuy, float top, float bot) =>
     float proximal = isBuy ? bot : top
     float mid = (top + bot) * 0.5
-    entryFill == "proximal" ? proximal : mid
+    entryFill == "近端" ? proximal : mid
 
 f_px(float v) =>
     str.tostring(v, format.mintick)
@@ -104,7 +104,7 @@ f_updatePending(box pendingBox, bool isBuy, float top, float bot) =>
     box out = pendingBox
     if showPending and not na(top) and not na(bot)
         if na(out)
-            out := box.new(bar_index, top, bar_index + 1, bot, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=isBuy ? "WAIT BUY" : "WAIT SELL", text_size=size.tiny, text_color=color.new(#f57f17, 0))
+            out := box.new(bar_index, top, bar_index + 1, bot, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=isBuy ? "等待作多" : "等待作空", text_size=size.tiny, text_color=color.new(#f57f17, 0))
         else
             box.set_right(out, bar_index + 1)
             box.set_top(out, top)
@@ -117,36 +117,36 @@ f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvg
     float risk = math.abs(entry - sl)
     float reward = math.abs(tp - entry)
     float rr = risk > 0.0 ? reward / risk : 0.0
-    string sideTxt = isBuy ? "MMBM BUY" : "MMSM SELL"
+    string sideTxt = isBuy ? "作多 MMBM" : "作空 MMSM"
     color riskC = isBuy ? buyRiskCol : sellRiskCol
     color rewC = isBuy ? buyRewardCol : sellRewardCol
     color entryC = isBuy ? color.teal : color.orange
 
     if showAccBox and not na(accHi) and not na(accLo)
         int ax1 = math.max(accStartBar, bar_index - lookback * 3)
-        box.new(ax1, accHi, x1, accLo, bgcolor=accCol, border_color=color.new(#ab47bc, 40), border_width=1, text="ACC", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
+        box.new(ax1, accHi, x1, accLo, bgcolor=accCol, border_color=color.new(#ab47bc, 40), border_width=1, text="累積", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
 
     if showFvgBox and not na(fvgTop) and not na(fvgBot)
         int fx1 = math.max(fvgBar - 1, x1 - 10)
-        box.new(fx1, fvgTop, x2, fvgBot, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
+        box.new(fx1, fvgTop, x2, fvgBot, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="失衡區", text_size=size.tiny, text_color=color.new(#1565c0, 0))
 
     if showRrBoxes
         if isBuy
-            box.new(x1, entry, x2, sl, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="RISK", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
-            box.new(x1, tp, x2, entry, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="REWARD", text_color=color.new(#004d40, 0), text_size=size.tiny)
+            box.new(x1, entry, x2, sl, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="風險", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, tp, x2, entry, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
         else
-            box.new(x1, sl, x2, entry, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="RISK", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
-            box.new(x1, entry, x2, tp, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="REWARD", text_color=color.new(#004d40, 0), text_size=size.tiny)
+            box.new(x1, sl, x2, entry, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="風險", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, entry, x2, tp, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
 
     if showLevelLines
         line.new(x1, entry, x2, entry, color=entryC, width=2)
         line.new(x1, sl, x2, sl, color=color.red, width=2, style=line.style_dashed)
         line.new(x1, tp, x2, tp, color=color.lime, width=2, style=line.style_dashed)
-        label.new(x2, entry, "ENTRY " + f_px(entry), style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
-        label.new(x2, sl, "SL " + f_px(sl), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
-        label.new(x2, tp, "TP " + f_px(tp), style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+        label.new(x2, entry, "進場 " + f_px(entry), style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
+        label.new(x2, sl, "停損 " + f_px(sl), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+        label.new(x2, tp, "停利 " + f_px(tp), style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
 
-    string body = sideTxt + "\nEntry " + f_px(entry) + "\nSL " + f_px(sl) + "\nTP " + f_px(tp) + "\nR:R 1:" + str.tostring(rr, "#.##") + "\nPhase-4 retrace"
+    string body = sideTxt + "\n進場 " + f_px(entry) + "\n停損 " + f_px(sl) + "\n停利 " + f_px(tp) + "\n報酬比 1:" + str.tostring(rr, "#.##") + "\n第四階段回踩"
     label.new(x1, sl, body, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
     rr
 
@@ -465,29 +465,29 @@ if bar_index >= math.max(lookback, atrPeriod)
                     sPendingBox := na
                 sPhase := ENT
 
-plotshape(showMarkers and showBuy and buySignal, title="MMBM Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="BUY")
-plotshape(showMarkers and showSell and sellSignal, title="MMSM Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="SELL")
+plotshape(showMarkers and showBuy and buySignal, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="作多")
+plotshape(showMarkers and showSell and sellSignal, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="作空")
 
 var table info = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
-    table.cell(info, 0, 0, "MMXM v2", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 0, "Phase-4 tap", text_color=color.aqua, text_size=size.small)
-    table.cell(info, 0, 1, "Buy phase", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 0, "MMXM", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, "第四階段回踩", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 0, 1, "作多階段", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 1, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 2, "Sell phase", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 2, "作空階段", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 2, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
     table.cell(info, 0, 3, "ATR", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 3, not na(atrVal) ? f_px(atrVal) : "-", text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 4, "Buy wait entry", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 4, "作多等待進場", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 4, bPhase == WAIT and not na(bEntry) ? f_px(bEntry) : "-", text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 5, "Sell wait entry", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 5, "作空等待進場", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 5, sPhase == WAIT and not na(sEntry) ? f_px(sEntry) : "-", text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 6, "Tight now?", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 6, candTight ? "YES" : "NO", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
-    table.cell(info, 0, 7, "Last Buy RR", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 6, "目前是否收斂", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 6, candTight ? "是" : "否", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
+    table.cell(info, 0, 7, "最近作多報酬比", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 7, not na(buyRR) ? "1:" + str.tostring(buyRR, "#.##") : "-", text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 8, "Last Sell RR", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 8, "最近作空報酬比", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 8, not na(sellRR) ? "1:" + str.tostring(sellRR, "#.##") : "-", text_color=color.orange, text_size=size.tiny)
 
-alertcondition(buySignal, "MMBM Entry", "MMXM Buy Phase-4 FVG retrace")
-alertcondition(sellSignal, "MMSM Entry", "MMXM Sell Phase-4 FVG retrace")
+alertcondition(buySignal, "作多進場", "MMXM 作多：第四階段 FVG 回踩進場")
+alertcondition(sellSignal, "作空進場", "MMXM 作空：第四階段 FVG 回踩進場")

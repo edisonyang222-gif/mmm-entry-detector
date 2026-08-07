@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 indicator("MMXM Entry Detector", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // ICT Market Maker Model entry detector
@@ -45,13 +45,10 @@ f_hasFvg(bull) =>
     bull ? low > high[2] : high < low[2]
 
 f_entryFromFvg(bull, top, bot) =>
-    proximal = bull ? bot : top
-    distal   = bull ? top : bot
-    mid      = (top + bot) * 0.5
+    float proximal = bull ? bot : top
+    float distal   = bull ? top : bot
+    float mid      = (top + bot) * 0.5
     entryFill == "proximal" ? proximal : entryFill == "distal" ? distal : mid
-
-f_reset() =>
-    [IDLE, na, na, na, na, na, na, 0]
 
 // Buy state
 var int   bPhase = IDLE
@@ -71,16 +68,16 @@ var int   sExpBar = 0
 var float sFvgTop = na
 var float sFvgBot = na
 
-buySignal = false
-sellSignal = false
-buyEntry = na
-buySL = na
-buyTP = na
-sellEntry = na
-sellSL = na
-sellTP = na
+bool  buySignal = false
+bool  sellSignal = false
+float buyEntry = na
+float buySL = na
+float buyTP = na
+float sellEntry = na
+float sellSL = na
+float sellTP = na
 
-isTight = not na(atrVal) and atrVal > 0 and (rangeHigh - rangeLow) <= maxRangeAtrMult * atrVal
+bool isTight = not na(atrVal) and atrVal > 0 and (rangeHigh - rangeLow) <= maxRangeAtrMult * atrVal
 
 // -------- BUY MODEL --------
 if bar_index >= math.max(lookback, atrPeriod)
@@ -93,15 +90,15 @@ if bar_index >= math.max(lookback, atrPeriod)
         bFvgTop := na
         bFvgBot := na
 
-    frozenHi = bAccHi
-    frozenLo = bAccLo
+    bFrozenHi = bAccHi
+    bFrozenLo = bAccLo
 
     if bPhase == IDLE or bPhase == ACC
-        if bPhase == ACC and not na(frozenLo) and low < frozenLo - manipAtrMult * atrVal
+        if bPhase == ACC and not na(bFrozenLo) and low < bFrozenLo - manipAtrMult * atrVal
             bPhase := MAN
             bManip := low
-            bAccHi := frozenHi
-            bAccLo := frozenLo
+            bAccHi := bFrozenHi
+            bAccLo := bFrozenLo
         else if isTight
             bPhase := ACC
             bAccHi := rangeHigh
@@ -163,15 +160,15 @@ if bar_index >= math.max(lookback, atrPeriod)
         sFvgTop := na
         sFvgBot := na
 
-    frozenHi = sAccHi
-    frozenLo = sAccLo
+    sFrozenHi = sAccHi
+    sFrozenLo = sAccLo
 
     if sPhase == IDLE or sPhase == ACC
-        if sPhase == ACC and not na(frozenHi) and high > frozenHi + manipAtrMult * atrVal
+        if sPhase == ACC and not na(sFrozenHi) and high > sFrozenHi + manipAtrMult * atrVal
             sPhase := MAN
             sManip := high
-            sAccHi := frozenHi
-            sAccLo := frozenLo
+            sAccHi := sFrozenHi
+            sAccLo := sFrozenLo
         else if isTight
             sPhase := ACC
             sAccHi := rangeHigh

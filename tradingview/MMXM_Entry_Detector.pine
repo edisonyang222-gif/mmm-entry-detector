@@ -432,7 +432,7 @@ float candHi = ta.highest(high, lookback)
 float candLo = ta.lowest(low, lookback)
 bool candTight = not na(atrVal) and atrVal > 0.0 and not na(candHi) and not na(candLo) and (candHi - candLo) <= maxRangeAtrMult * atrVal and (candHi - candLo) > 0.0
 
-bool runModel = entryModel == "MMXM第四階段" or entryModel == "ERT交易系統"
+bool runModel = entryModel == "MMXM第四階段" or entryModel == "ERT交易系統" or entryModel == "PO3派發進場"
 
 if bar_index >= math.max(lookback, atrPeriod) and runModel
     // ===================== BUY =====================
@@ -562,7 +562,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close < bFvgBot
         if timedOut or stopped or fvgBroken
             bPhase := INV
-        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true) and f_dolAllows(true)
+        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true) and f_dolAllows(true) and f_po3Allows(true)
             buySignal := true
             buyRR := f_registerSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartBar, bFvgBar, entryTrigger)
             bPhase := ENT
@@ -694,7 +694,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close > sFvgTop
         if timedOut or stopped or fvgBroken
             sPhase := INV
-        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false) and f_dolAllows(false)
+        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false) and f_dolAllows(false) and f_po3Allows(false)
             sellSignal := true
             sellRR := f_registerSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             sPhase := ENT
@@ -743,44 +743,54 @@ fill(plotE, plotT, title="目標區", color=rrOn ? (rrIsBuy ? buyRewardCol : sel
 
 bgcolor(showPending and bPhase == WAIT ? color.new(#ffca28, 90) : na, title="等待作多回踩")
 bgcolor(showPending and sPhase == WAIT ? color.new(#ffb300, 90) : na, title="等待作空回踩")
+bgcolor(showPo3Bg and usePo3 and po3Phase == PO3_ACC ? color.new(#90caf9, 92) : na, title="PO3累積")
+bgcolor(showPo3Bg and usePo3 and po3Phase == PO3_MAN ? color.new(#ef9a9a, 92) : na, title="PO3操控")
+bgcolor(showPo3Bg and usePo3 and po3Phase == PO3_DIST ? color.new(#a5d6a7, 92) : na, title="PO3派發")
 
+plotshape(showMarkers and showBuy and buySignal and isPo3Mode, title="PO3作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="PO3多")
 plotshape(showMarkers and showBuy and buySignal and isErtMode, title="ERT作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="E多")
-plotshape(showMarkers and showBuy and buySignal and not isErtMode, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="作多")
+plotshape(showMarkers and showBuy and buySignal and not isErtMode and not isPo3Mode, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="作多")
+plotshape(showMarkers and showSell and sellSignal and isPo3Mode, title="PO3作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="PO3空")
 plotshape(showMarkers and showSell and sellSignal and isErtMode, title="ERT作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="E空")
-plotshape(showMarkers and showSell and sellSignal and not isErtMode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="作空")
+plotshape(showMarkers and showSell and sellSignal and not isErtMode and not isPo3Mode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="作空")
 
-// 右上精簡表：盈虧 + 流動性路徑（畫面固定，不佔滿圖）
-var table info = table.new(position.top_right, 2, 12, bgcolor=color.new(#111111, 15), border_width=1, border_color=color.gray)
+// 右上精簡表：PO3 + 流動性 + 盈虧（畫面固定）
+var table info = table.new(position.top_right, 2, 13, bgcolor=color.new(#111111, 15), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
+    color po3Col = po3Phase == PO3_DIST ? color.lime : po3Phase == PO3_MAN ? color.orange : po3Phase == PO3_ACC ? color.aqua : color.gray
     color dolCol = dolDir > 0 ? color.teal : dolDir < 0 ? color.orange : color.gray
-    table.cell(info, 0, 0, "流動性", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 0, f_dolPathName(), text_color=dolCol, text_size=size.small)
-    table.cell(info, 0, 1, "DOL", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 1, f_dolTargetName(), text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 2, "方向", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 2, lastSide, text_color=lastIsBuy ? color.teal : color.orange, text_size=size.tiny)
-    table.cell(info, 0, 3, "E", text_color=color.aqua, text_size=size.small)
-    table.cell(info, 1, 3, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 4, "R", text_color=color.red, text_size=size.small)
-    table.cell(info, 1, 4, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 5, "T1", text_color=color.yellow, text_size=size.small)
-    table.cell(info, 1, 5, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 6, "T2", text_color=color.lime, text_size=size.small)
-    table.cell(info, 1, 6, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 7, "RR", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 7, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
-    table.cell(info, 0, 8, "HTF", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 0, "PO3", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, f_po3Name(), text_color=po3Col, text_size=size.small)
+    table.cell(info, 0, 1, "流動性", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 1, f_dolPathName(), text_color=dolCol, text_size=size.small)
+    table.cell(info, 0, 2, "DOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 2, f_dolTargetName(), text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 3, "方向", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 3, lastSide, text_color=lastIsBuy ? color.teal : color.orange, text_size=size.tiny)
+    table.cell(info, 0, 4, "E", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 1, 4, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 5, "R", text_color=color.red, text_size=size.small)
+    table.cell(info, 1, 5, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 6, "T1", text_color=color.yellow, text_size=size.small)
+    table.cell(info, 1, 6, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 7, "T2", text_color=color.lime, text_size=size.small)
+    table.cell(info, 1, 7, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 8, "RR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 8, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
+    table.cell(info, 0, 9, "HTF", text_color=color.gray, text_size=size.tiny)
     color htfCol = htfBias > 0 ? color.teal : htfBias < 0 ? color.orange : color.gray
-    table.cell(info, 1, 8, htfFilterOn ? f_htfName(htfBias) : "關", text_color=htfCol, text_size=size.tiny)
-    table.cell(info, 0, 9, "多階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 9, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 10, "空階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 10, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 1, 9, htfFilterOn ? f_htfName(htfBias) : "關", text_color=htfCol, text_size=size.tiny)
+    table.cell(info, 0, 10, "多階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 10, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 11, "空階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 11, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
     if showErtChecklist
-        table.cell(info, 0, 11, "模型", text_color=color.gray, text_size=size.tiny)
-        table.cell(info, 1, 11, entryModel, text_color=color.aqua, text_size=size.tiny)
+        table.cell(info, 0, 12, "模型", text_color=color.gray, text_size=size.tiny)
+        table.cell(info, 1, 12, entryModel, text_color=color.aqua, text_size=size.tiny)
 
-alertcondition(buySignal, "作多進場", "ICT MMXM/ERT 作多進場")
-alertcondition(sellSignal, "作空進場", "ICT MMXM/ERT 作空進場")
+alertcondition(buySignal, "作多進場", "ICT MMXM/ERT/PO3 作多進場")
+alertcondition(sellSignal, "作空進場", "ICT MMXM/ERT/PO3 作空進場")
+alertcondition(usePo3 and po3Phase == PO3_DIST and po3Dir > 0, "PO3派發偏多", "PO3 進入派發（偏多）")
+alertcondition(usePo3 and po3Phase == PO3_DIST and po3Dir < 0, "PO3派發偏空", "PO3 進入派發（偏空）")
 alertcondition(useErlIrl and dolPhase == 1 and dolDir != 0, "ERL→IRL", "流動性路徑：ERL→IRL")
 alertcondition(useErlIrl and dolPhase == 2 and dolDir != 0, "IRL→ERL", "流動性路徑：IRL→ERL")

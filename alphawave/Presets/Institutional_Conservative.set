@@ -1,0 +1,23 @@
+; Alpha Wave Institutional — conservative preset
+; Priority: MaxDD > Expectancy > PF > Stability > Net profit
+;
+; Copy Experts + Include folders into MetaTrader 5 data folder:
+;   MQL5/Experts/AlphaWave/AlphaWave_Institutional.mq5
+;   MQL5/Include/AlphaWave/Pro/*
+;   MQL5/Include/AlphaWave/Institutional/*
+
+InpRiskPercent=0.5
+InpMinScoreNormal=75
+InpMinScoreHighVol=85
+InpMinScoreLowLiq=90
+InpBlockLowVol=true
+InpBlockUnstable=true
+InpAutoDisableEnabled=false
+InpAutoDisableMinSamples=100
+InpGmtOffsetHours=8
+InpTradeAsia=false
+InpTradeLondon=true
+InpTradeNY=true
+InpDailyL3=5.0
+InpWeeklyL3=8.0
+InpMonthlyL3=15.0

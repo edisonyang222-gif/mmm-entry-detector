@@ -1,53 +1,64 @@
 //@version=6
 indicator("MMXM 進場偵測器", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
-// ICT Market Maker Model — more conservative detection
-// Timezone-independent (OHLC only). Entry waits for Phase-4 FVG retrace.
-// Note: Pine forbids modifying globals inside functions (CE10088), so resets are inlined.
+// ICT Market Maker Model 進場偵測
+// 流程：累積 → 掃蕩 → 擴張/MSS + FVG → 第四階段回踩進場
+// 時區無關（只看 OHLC）。禁止在函式內改全域變數（CE10088）。
 
-int   lookback        = input.int(20, "累積區間回看根數", minval=5, group="偵測設定")
-int   minAccBars      = input.int(5, "最少累積根數", minval=2, group="偵測設定")
-int   atrPeriod       = input.int(14, "ATR 週期", minval=1, group="偵測設定")
-float maxRangeAtrMult = input.float(2.5, "最大區間寬度（×ATR）", minval=0.5, step=0.1, group="偵測設定")
-float manipAtrMult    = input.float(0.25, "最少掃蕩深度（×ATR）", minval=0.0, step=0.05, group="偵測設定")
-float minSweepOfRange = input.float(0.15, "最少掃蕩深度（佔區間比例）", minval=0.0, step=0.05, group="偵測設定")
-float dispBodyRatio   = input.float(0.55, "位移K線實體比例", minval=0.1, maxval=1.0, step=0.05, group="偵測設定")
-float dispAtrMult     = input.float(0.9, "位移K線最小幅度（×ATR）", minval=0.1, step=0.1, group="偵測設定")
-float minRR           = input.float(2.0, "最小風險報酬比", minval=0.5, step=0.1, group="偵測設定")
-float stopBufAtrMult  = input.float(0.05, "停損緩衝（×ATR）", minval=0.0, step=0.01, group="偵測設定")
-string entryFill      = input.string("中點", "進場價位（FVG）", options=["中點", "近端"], group="偵測設定")
-int   maxWaitBars     = input.int(20, "最多等待回踩根數", minval=3, group="偵測設定")
-bool  requireCloseBack= input.bool(true, "回踩後需收回到FVG側", group="偵測設定")
-bool  requireMss      = input.bool(true, "需要結構突破（收破區間）", group="偵測設定")
+// ===== ICT 進場模型 =====
+string entryModel = input.string("MMXM第四階段", "進場模型", options=["MMXM第四階段"], group="ICT進場模型", tooltip="目前實作 ICT Market Maker Model 第四階段：FVG/CE 回踩進場")
+string entryFill  = input.string("中點CE", "進場參考價", options=["中點CE", "近端", "OTE62"], group="ICT進場模型", tooltip="中點CE=FVG 50%；近端=先碰到的FVG邊界；OTE62=位移腿 62% 回撤（若落在FVG內優先，否則用中點）")
+string entryTrigger = input.string("收K確認進場", "進場確認方式", options=["觸價可進場", "收K確認進場", "收K進入失衡區"], group="ICT進場模型", tooltip="觸價可進場=影線碰到即可（偏限價）；收K確認進場=碰到後收盤回到進場側；收K進入失衡區=收盤落入FVG內才算")
+bool   requireMss = input.bool(true, "需要結構突破MSS（收破累積區間）", group="ICT進場模型")
+bool   requireBullBearClose = input.bool(true, "收K確認時需同向收盤（多收陽/空收陰）", group="ICT進場模型")
 
-bool  showBuy         = input.bool(true, "顯示作多模型（MMBM）", group="顯示設定")
-bool  showSell        = input.bool(true, "顯示作空模型（MMSM）", group="顯示設定")
-bool  showRrBoxes     = input.bool(true, "顯示盈虧方塊", group="顯示設定")
-bool  showLevelLines  = input.bool(true, "顯示進場/停損/停利線", group="顯示設定")
-bool  showFvgBox      = input.bool(true, "顯示 FVG 框", group="顯示設定")
-bool  showAccBox      = input.bool(true, "顯示累積區間框", group="顯示設定")
-bool  showPending     = input.bool(true, "顯示等待回踩框", group="顯示設定")
-bool  showMarkers     = input.bool(true, "顯示進場標記", group="顯示設定")
-bool  showInfoTable   = input.bool(true, "顯示右上狀態表", group="顯示設定")
-int   boxBars         = input.int(25, "方塊/線段延伸根數", minval=5, maxval=200, group="顯示設定")
+// ===== 盈虧比 / 停損停利 =====
+string tpMode = input.string("兩者取遠", "停利計算方式", options=["固定報酬比", "結構投射", "兩者取遠"], group="盈虧設定", tooltip="固定報酬比=進場±風險×目標倍數；結構投射=掃蕩深度投射；兩者取遠=取較遠目標（報酬比較高）")
+float  targetRR = input.float(2.0, "目標報酬比（1:X）", minval=0.5, step=0.5, group="盈虧設定")
+float  minRR = input.float(1.5, "最小可接受報酬比", minval=0.5, step=0.1, group="盈虧設定", tooltip="算出來的實際RR低於此值，整筆設定作廢")
+float  stopBufAtrMult = input.float(0.05, "停損緩衝（×ATR）", minval=0.0, step=0.01, group="盈虧設定")
+bool   showTP1 = input.bool(true, "另外標示 1R 參考線", group="盈虧設定")
 
-color buyRiskCol    = input.color(color.new(#ef5350, 75), "作多風險區顏色", group="顏色")
-color buyRewardCol  = input.color(color.new(#26a69a, 75), "作多獲利區顏色", group="顏色")
-color sellRiskCol   = input.color(color.new(#ef5350, 75), "作空風險區顏色", group="顏色")
+// ===== 結構偵測 =====
+int   lookback = input.int(20, "累積區間回看根數", minval=5, group="結構偵測")
+int   minAccBars = input.int(5, "最少累積根數", minval=2, group="結構偵測")
+int   atrPeriod = input.int(14, "ATR 週期", minval=1, group="結構偵測")
+float maxRangeAtrMult = input.float(2.5, "最大區間寬度（×ATR）", minval=0.5, step=0.1, group="結構偵測")
+float manipAtrMult = input.float(0.25, "最少掃蕩深度（×ATR）", minval=0.0, step=0.05, group="結構偵測")
+float minSweepOfRange = input.float(0.15, "最少掃蕩深度（佔區間比例）", minval=0.0, step=0.05, group="結構偵測")
+float dispBodyRatio = input.float(0.55, "位移K線實體比例", minval=0.1, maxval=1.0, step=0.05, group="結構偵測")
+float dispAtrMult = input.float(0.9, "位移K線最小幅度（×ATR）", minval=0.1, step=0.1, group="結構偵測")
+int   maxWaitBars = input.int(20, "最多等待回踩根數", minval=3, group="結構偵測")
+
+// ===== 顯示 =====
+bool showBuy = input.bool(true, "顯示作多模型（MMBM）", group="顯示設定")
+bool showSell = input.bool(true, "顯示作空模型（MMSM）", group="顯示設定")
+bool showRrBoxes = input.bool(true, "顯示盈虧方塊", group="顯示設定")
+bool showLevelLines = input.bool(true, "顯示進場/停損/停利線", group="顯示設定")
+bool showFvgBox = input.bool(true, "顯示失衡區框", group="顯示設定")
+bool showAccBox = input.bool(true, "顯示累積區間框", group="顯示設定")
+bool showPending = input.bool(true, "顯示等待回踩框", group="顯示設定")
+bool showMarkers = input.bool(true, "顯示進場標記", group="顯示設定")
+bool showInfoTable = input.bool(true, "顯示右上狀態表", group="顯示設定")
+int  boxBars = input.int(25, "方塊/線段延伸根數", minval=5, maxval=200, group="顯示設定")
+
+color buyRiskCol = input.color(color.new(#ef5350, 75), "作多風險區顏色", group="顏色")
+color buyRewardCol = input.color(color.new(#26a69a, 75), "作多獲利區顏色", group="顏色")
+color sellRiskCol = input.color(color.new(#ef5350, 75), "作空風險區顏色", group="顏色")
 color sellRewardCol = input.color(color.new(#26a69a, 75), "作空獲利區顏色", group="顏色")
-color fvgCol        = input.color(color.new(#42a5f5, 80), "FVG 框顏色", group="顏色")
-color accCol        = input.color(color.new(#ab47bc, 88), "累積框顏色", group="顏色")
-color pendingCol    = input.color(color.new(#ffca28, 85), "等待回踩框顏色", group="顏色")
+color fvgCol = input.color(color.new(#42a5f5, 80), "失衡區框顏色", group="顏色")
+color accCol = input.color(color.new(#ab47bc, 88), "累積框顏色", group="顏色")
+color pendingCol = input.color(color.new(#ffca28, 85), "等待回踩框顏色", group="顏色")
 
 float atrVal = ta.atr(atrPeriod)
 
 int IDLE = 0
-int ACC  = 1
-int MAN  = 2
-int EXP  = 3
+int ACC = 1
+int MAN = 2
+int EXP = 3
 int WAIT = 4
-int ENT  = 5
-int INV  = 6
+int ENT = 5
+int INV = 6
 
 f_phaseName(int p) =>
     switch p
@@ -58,6 +69,9 @@ f_phaseName(int p) =>
         ENT => "已進場"
         INV => "已失效"
         => "待機"
+
+f_triggerName() =>
+    entryTrigger
 
 f_isDisp(bool bull) =>
     float rng = high - low
@@ -83,15 +97,25 @@ f_bearFvgTop() =>
 f_bearFvgBot() =>
     high
 
-f_entryLevel(bool isBuy, float top, float bot) =>
-    float proximal = isBuy ? bot : top
-    float mid = (top + bot) * 0.5
-    entryFill == "近端" ? proximal : mid
-
 f_px(float v) =>
     str.tostring(v, format.mintick)
 
-f_calcTp(bool isBuy, float accHi, float accLo, float manip) =>
+// ICT entry price inside FVG (+ optional OTE of manip→expansion leg)
+f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
+    float proximal = isBuy ? bot : top
+    float mid = (top + bot) * 0.5
+    float ote = isBuy ? (expExtreme - (expExtreme - manip) * 0.62) : (expExtreme + (manip - expExtreme) * 0.62)
+    float result = mid
+    if entryFill == "近端"
+        result := proximal
+    else if entryFill == "OTE62"
+        // Prefer OTE if it sits inside FVG; otherwise fall back to CE
+        bool oteInFvg = ote <= top and ote >= bot
+        result := oteInFvg ? ote : mid
+    result
+
+// Structural measured-move TP
+f_structTp(bool isBuy, float accHi, float accLo, float manip) =>
     if isBuy
         float depth = accHi - manip
         math.max(accHi + depth, accHi + (accHi - accLo))
@@ -99,19 +123,28 @@ f_calcTp(bool isBuy, float accHi, float accLo, float manip) =>
         float depth = manip - accLo
         math.min(accLo - depth, accLo - (accHi - accLo))
 
-// Pure helper: create/update a pending box and return it (no global writes)
+// Final TP by mode + RR quality check. Returns [tp, rr, ok]
+f_planLevels(bool isBuy, float entry, float sl) =>
+    float risk = math.abs(entry - sl)
+    float fixedTp = isBuy ? entry + risk * targetRR : entry - risk * targetRR
+    float structTp = f_structTp(isBuy, isBuy ? bAccHi : sAccHi, isBuy ? bAccLo : sAccLo, isBuy ? bManip : sManip)
+    // NOTE: f_planLevels is called with acc/manip already known in caller; keep local calc there instead.
+    [fixedTp, risk]
+
 f_updatePending(box pendingBox, bool isBuy, float top, float bot) =>
     box out = pendingBox
     if showPending and not na(top) and not na(bot)
+        string t = isBuy ? "等待作多·" + entryTrigger : "等待作空·" + entryTrigger
         if na(out)
-            out := box.new(bar_index, top, bar_index + 1, bot, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=isBuy ? "等待作多" : "等待作空", text_size=size.tiny, text_color=color.new(#f57f17, 0))
+            out := box.new(bar_index, top, bar_index + 1, bot, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=t, text_size=size.tiny, text_color=color.new(#f57f17, 0))
         else
             box.set_right(out, bar_index + 1)
             box.set_top(out, top)
             box.set_bottom(out, bot)
+            box.set_text(out, t)
     out
 
-f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar, int fvgBar) =>
+f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar, int fvgBar, string modeTxt) =>
     int x1 = bar_index
     int x2 = bar_index + boxBars
     float risk = math.abs(entry - sl)
@@ -121,6 +154,7 @@ f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvg
     color riskC = isBuy ? buyRiskCol : sellRiskCol
     color rewC = isBuy ? buyRewardCol : sellRewardCol
     color entryC = isBuy ? color.teal : color.orange
+    float tp1 = isBuy ? entry + risk : entry - risk
 
     if showAccBox and not na(accHi) and not na(accLo)
         int ax1 = math.max(accStartBar, bar_index - lookback * 3)
@@ -128,62 +162,84 @@ f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvg
 
     if showFvgBox and not na(fvgTop) and not na(fvgBot)
         int fx1 = math.max(fvgBar - 1, x1 - 10)
-        box.new(fx1, fvgTop, x2, fvgBot, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="失衡區", text_size=size.tiny, text_color=color.new(#1565c0, 0))
+        box.new(fx1, fvgTop, x2, fvgBot, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="失衡區FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
 
     if showRrBoxes
         if isBuy
-            box.new(x1, entry, x2, sl, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="風險", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, entry, x2, sl, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
             box.new(x1, tp, x2, entry, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
         else
-            box.new(x1, sl, x2, entry, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="風險", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, sl, x2, entry, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
             box.new(x1, entry, x2, tp, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
 
     if showLevelLines
         line.new(x1, entry, x2, entry, color=entryC, width=2)
         line.new(x1, sl, x2, sl, color=color.red, width=2, style=line.style_dashed)
         line.new(x1, tp, x2, tp, color=color.lime, width=2, style=line.style_dashed)
+        if showTP1
+            line.new(x1, tp1, x2, tp1, color=color.new(color.yellow, 30), width=1, style=line.style_dotted)
+            label.new(x2, tp1, "1R " + f_px(tp1), style=label.style_label_left, color=color.new(color.yellow, 70), textcolor=color.black, size=size.tiny)
         label.new(x2, entry, "進場 " + f_px(entry), style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
         label.new(x2, sl, "停損 " + f_px(sl), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
         label.new(x2, tp, "停利 " + f_px(tp), style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
 
-    string body = sideTxt + "\n進場 " + f_px(entry) + "\n停損 " + f_px(sl) + "\n停利 " + f_px(tp) + "\n報酬比 1:" + str.tostring(rr, "#.##") + "\n第四階段回踩"
+    string body = sideTxt + "\n模型 " + entryModel + "\n確認 " + modeTxt + "\n進場 " + f_px(entry) + "\n停損 " + f_px(sl) + "\n停利 " + f_px(tp) + "\n報酬比 1:" + str.tostring(rr, "#.##")
     label.new(x1, sl, body, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
     rr
 
+// ICT entry confirmation (no global writes)
+f_entryConfirmed(bool isBuy, float entry, float fvgTop, float fvgBot) =>
+    bool tappedZone = isBuy ? (low <= fvgTop and high >= fvgBot) : (high >= fvgBot and low <= fvgTop)
+    bool tappedCE = low <= entry and high >= entry
+    bool closeInFvg = close <= fvgTop and close >= fvgBot
+    bool closeBack = isBuy ? (close >= entry or close >= fvgBot) : (close <= entry or close <= fvgTop)
+    bool dirOk = not requireBullBearClose or (isBuy ? close > open : close < open)
+    bool ok = false
+    if entryTrigger == "觸價可進場"
+        ok := tappedZone or tappedCE
+    else if entryTrigger == "收K進入失衡區"
+        ok := closeInFvg and dirOk
+    else
+        // 收K確認進場
+        ok := (tappedZone or tappedCE) and closeBack and dirOk
+    ok
+
 // ---- Buy state ----
-var int   bPhase = IDLE
+var int bPhase = IDLE
 var float bAccHi = float(na)
 var float bAccLo = float(na)
-var int   bAccStart = 0
-var int   bAccCount = 0
+var int bAccStart = 0
+var int bAccCount = 0
 var float bManip = float(na)
-var int   bExpBar = 0
-var int   bFvgBar = 0
+var int bExpBar = 0
+var int bFvgBar = 0
 var float bFvgTop = float(na)
 var float bFvgBot = float(na)
+var float bExpExt = float(na)
 var float bEntry = float(na)
 var float bSL = float(na)
 var float bTP = float(na)
-var box   bPendingBox = na
+var box bPendingBox = na
 
 // ---- Sell state ----
-var int   sPhase = IDLE
+var int sPhase = IDLE
 var float sAccHi = float(na)
 var float sAccLo = float(na)
-var int   sAccStart = 0
-var int   sAccCount = 0
+var int sAccStart = 0
+var int sAccCount = 0
 var float sManip = float(na)
-var int   sExpBar = 0
-var int   sFvgBar = 0
+var int sExpBar = 0
+var int sFvgBar = 0
 var float sFvgTop = float(na)
 var float sFvgBot = float(na)
+var float sExpExt = float(na)
 var float sEntry = float(na)
 var float sSL = float(na)
 var float sTP = float(na)
-var box   sPendingBox = na
+var box sPendingBox = na
 
-var bool  buySignal = false
-var bool  sellSignal = false
+var bool buySignal = false
+var bool sellSignal = false
 var float buyRR = float(na)
 var float sellRR = float(na)
 
@@ -194,7 +250,7 @@ float candHi = ta.highest(high, lookback)
 float candLo = ta.lowest(low, lookback)
 bool candTight = not na(atrVal) and atrVal > 0.0 and not na(candHi) and not na(candLo) and (candHi - candLo) <= maxRangeAtrMult * atrVal and (candHi - candLo) > 0.0
 
-if bar_index >= math.max(lookback, atrPeriod)
+if bar_index >= math.max(lookback, atrPeriod) and entryModel == "MMXM第四階段"
     // ===================== BUY =====================
     if bPhase == ENT or bPhase == INV
         bPhase := IDLE
@@ -206,6 +262,7 @@ if bar_index >= math.max(lookback, atrPeriod)
         bFvgBar := 0
         bFvgTop := float(na)
         bFvgBot := float(na)
+        bExpExt := float(na)
         bEntry := float(na)
         bSL := float(na)
         bTP := float(na)
@@ -232,6 +289,7 @@ if bar_index >= math.max(lookback, atrPeriod)
                 bFvgBar := 0
                 bFvgTop := float(na)
                 bFvgBot := float(na)
+                bExpExt := float(na)
                 bEntry := float(na)
                 bSL := float(na)
                 bTP := float(na)
@@ -262,6 +320,7 @@ if bar_index >= math.max(lookback, atrPeriod)
             bFvgBar := 0
             bFvgTop := float(na)
             bFvgBot := float(na)
+            bExpExt := float(na)
             bEntry := float(na)
             bSL := float(na)
             bTP := float(na)
@@ -277,6 +336,7 @@ if bar_index >= math.max(lookback, atrPeriod)
         if bullDisp
             bPhase := EXP
             bExpBar := bar_index
+            bExpExt := high
             if f_hasBullFvg()
                 bFvgTop := f_bullFvgTop()
                 bFvgBot := f_bullFvgBot()
@@ -285,15 +345,24 @@ if bar_index >= math.max(lookback, atrPeriod)
             bPhase := INV
 
     else if bPhase == EXP
+        if high > bExpExt
+            bExpExt := high
         if na(bFvgTop) and f_hasBullFvg()
             bFvgTop := f_bullFvgTop()
             bFvgBot := f_bullFvgBot()
             bFvgBar := bar_index
-        if not na(bFvgTop) and not na(bFvgBot)
-            float entry = f_entryLevel(true, bFvgTop, bFvgBot)
+        if not na(bFvgTop) and not na(bFvgBot) and not na(bManip)
+            float entry = f_entryLevel(true, bFvgTop, bFvgBot, bManip, bExpExt)
             float sl = bManip - stopBufAtrMult * atrVal
-            float tp = f_calcTp(true, bAccHi, bAccLo, bManip)
             float risk = entry - sl
+            float fixedTp = entry + risk * targetRR
+            float depth = bAccHi - bManip
+            float structTp = math.max(bAccHi + depth, bAccHi + (bAccHi - bAccLo))
+            float tp = fixedTp
+            if tpMode == "結構投射"
+                tp := structTp
+            else if tpMode == "兩者取遠"
+                tp := math.max(fixedTp, structTp)
             float reward = tp - entry
             float rr = risk > 0.0 ? reward / risk : 0.0
             if risk > 0.0 and reward > 0.0 and rr >= minRR
@@ -317,18 +386,13 @@ if bar_index >= math.max(lookback, atrPeriod)
             if not na(bPendingBox)
                 box.delete(bPendingBox)
                 bPendingBox := na
-        else
-            bool tapped = low <= bFvgTop and high >= bFvgBot
-            bool tappedCE = low <= bEntry and high >= bEntry
-            bool tapOk = tapped or tappedCE
-            bool closeOk = not requireCloseBack or close >= bEntry or close >= bFvgBot
-            if tapOk and closeOk and showBuy
-                buySignal := true
-                buyRR := f_drawSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStart, bFvgBar)
-                if not na(bPendingBox)
-                    box.delete(bPendingBox)
-                    bPendingBox := na
-                bPhase := ENT
+        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy
+            buySignal := true
+            buyRR := f_drawSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStart, bFvgBar, entryTrigger)
+            if not na(bPendingBox)
+                box.delete(bPendingBox)
+                bPendingBox := na
+            bPhase := ENT
 
     // ===================== SELL =====================
     if sPhase == ENT or sPhase == INV
@@ -341,6 +405,7 @@ if bar_index >= math.max(lookback, atrPeriod)
         sFvgBar := 0
         sFvgTop := float(na)
         sFvgBot := float(na)
+        sExpExt := float(na)
         sEntry := float(na)
         sSL := float(na)
         sTP := float(na)
@@ -367,6 +432,7 @@ if bar_index >= math.max(lookback, atrPeriod)
                 sFvgBar := 0
                 sFvgTop := float(na)
                 sFvgBot := float(na)
+                sExpExt := float(na)
                 sEntry := float(na)
                 sSL := float(na)
                 sTP := float(na)
@@ -397,6 +463,7 @@ if bar_index >= math.max(lookback, atrPeriod)
             sFvgBar := 0
             sFvgTop := float(na)
             sFvgBot := float(na)
+            sExpExt := float(na)
             sEntry := float(na)
             sSL := float(na)
             sTP := float(na)
@@ -412,6 +479,7 @@ if bar_index >= math.max(lookback, atrPeriod)
         if bearDisp
             sPhase := EXP
             sExpBar := bar_index
+            sExpExt := low
             if f_hasBearFvg()
                 sFvgTop := f_bearFvgTop()
                 sFvgBot := f_bearFvgBot()
@@ -420,15 +488,24 @@ if bar_index >= math.max(lookback, atrPeriod)
             sPhase := INV
 
     else if sPhase == EXP
+        if low < sExpExt
+            sExpExt := low
         if na(sFvgTop) and f_hasBearFvg()
             sFvgTop := f_bearFvgTop()
             sFvgBot := f_bearFvgBot()
             sFvgBar := bar_index
-        if not na(sFvgTop) and not na(sFvgBot)
-            float entry = f_entryLevel(false, sFvgTop, sFvgBot)
+        if not na(sFvgTop) and not na(sFvgBot) and not na(sManip)
+            float entry = f_entryLevel(false, sFvgTop, sFvgBot, sManip, sExpExt)
             float sl = sManip + stopBufAtrMult * atrVal
-            float tp = f_calcTp(false, sAccHi, sAccLo, sManip)
             float risk = sl - entry
+            float fixedTp = entry - risk * targetRR
+            float depth = sManip - sAccLo
+            float structTp = math.min(sAccLo - depth, sAccLo - (sAccHi - sAccLo))
+            float tp = fixedTp
+            if tpMode == "結構投射"
+                tp := structTp
+            else if tpMode == "兩者取遠"
+                tp := math.min(fixedTp, structTp)
             float reward = entry - tp
             float rr = risk > 0.0 ? reward / risk : 0.0
             if risk > 0.0 and reward > 0.0 and rr >= minRR
@@ -452,42 +529,41 @@ if bar_index >= math.max(lookback, atrPeriod)
             if not na(sPendingBox)
                 box.delete(sPendingBox)
                 sPendingBox := na
-        else
-            bool tapped = high >= sFvgBot and low <= sFvgTop
-            bool tappedCE = high >= sEntry and low <= sEntry
-            bool tapOk = tapped or tappedCE
-            bool closeOk = not requireCloseBack or close <= sEntry or close <= sFvgTop
-            if tapOk and closeOk and showSell
-                sellSignal := true
-                sellRR := f_drawSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStart, sFvgBar)
-                if not na(sPendingBox)
-                    box.delete(sPendingBox)
-                    sPendingBox := na
-                sPhase := ENT
+        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell
+            sellSignal := true
+            sellRR := f_drawSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStart, sFvgBar, entryTrigger)
+            if not na(sPendingBox)
+                box.delete(sPendingBox)
+                sPendingBox := na
+            sPhase := ENT
 
 plotshape(showMarkers and showBuy and buySignal, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="作多")
 plotshape(showMarkers and showSell and sellSignal, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="作空")
 
-var table info = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
+var table info = table.new(position.top_right, 2, 11, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
-    table.cell(info, 0, 0, "MMXM", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 0, "第四階段回踩", text_color=color.aqua, text_size=size.small)
-    table.cell(info, 0, 1, "作多階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 1, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 2, "作空階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 2, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 3, "ATR", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 3, not na(atrVal) ? f_px(atrVal) : "-", text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 4, "作多等待進場", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 4, bPhase == WAIT and not na(bEntry) ? f_px(bEntry) : "-", text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 5, "作空等待進場", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 5, sPhase == WAIT and not na(sEntry) ? f_px(sEntry) : "-", text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 6, "目前是否收斂", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 6, candTight ? "是" : "否", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
-    table.cell(info, 0, 7, "最近作多報酬比", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 7, not na(buyRR) ? "1:" + str.tostring(buyRR, "#.##") : "-", text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 8, "最近作空報酬比", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 8, not na(sellRR) ? "1:" + str.tostring(sellRR, "#.##") : "-", text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 0, "ICT進場", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, entryModel, text_color=color.aqua, text_size=size.small)
+    table.cell(info, 0, 1, "確認方式", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 1, entryTrigger, text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 2, "進場價", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 2, entryFill, text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 3, "停利方式", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 3, tpMode + " 1:" + str.tostring(targetRR, "#.#"), text_color=color.lime, text_size=size.tiny)
+    table.cell(info, 0, 4, "作多階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 4, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 5, "作空階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 5, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 6, "作多等待進場", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 6, bPhase == WAIT and not na(bEntry) ? f_px(bEntry) : "-", text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 7, "作空等待進場", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 7, sPhase == WAIT and not na(sEntry) ? f_px(sEntry) : "-", text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 8, "區間收斂", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 8, candTight ? "是" : "否", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
+    table.cell(info, 0, 9, "最近作多報酬比", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 9, not na(buyRR) ? "1:" + str.tostring(buyRR, "#.##") : "-", text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 10, "最近作空報酬比", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 10, not na(sellRR) ? "1:" + str.tostring(sellRR, "#.##") : "-", text_color=color.orange, text_size=size.tiny)
 
-alertcondition(buySignal, "作多進場", "MMXM 作多：第四階段 FVG 回踩進場")
-alertcondition(sellSignal, "作空進場", "MMXM 作空：第四階段 FVG 回踩進場")
+alertcondition(buySignal, "作多進場", "ICT MMXM 作多進場")
+alertcondition(sellSignal, "作空進場", "ICT MMXM 作空進場")

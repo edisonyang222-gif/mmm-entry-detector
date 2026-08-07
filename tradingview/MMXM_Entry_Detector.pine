@@ -605,8 +605,11 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 sPendingBox := na
             sPhase := ENT
 
-plotshape(showMarkers and showBuy and buySignal, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text=isErtMode ? "E多" : "作多")
-plotshape(showMarkers and showSell and sellSignal, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text=isErtMode ? "E空" : "作空")
+// plotshape text must be const string (CE10123) — split by mode
+plotshape(showMarkers and showBuy and buySignal and isErtMode, title="ERT作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="E多")
+plotshape(showMarkers and showBuy and buySignal and not isErtMode, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="作多")
+plotshape(showMarkers and showSell and sellSignal and isErtMode, title="ERT作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="E空")
+plotshape(showMarkers and showSell and sellSignal and not isErtMode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="作空")
 
 var table info = table.new(position.top_right, 2, 14, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast

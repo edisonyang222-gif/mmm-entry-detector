@@ -146,7 +146,7 @@ f_htfBiasCalc() =>
             bias := close >= mid ? 1 : -1
     bias
 
-[htfBiasRaw] = request.security(syminfo.tickerid, htfTf, f_htfBiasCalc(), barmerge.gaps_off, barmerge.lookahead_off)
+int htfBiasRaw = request.security(syminfo.tickerid, htfTf, f_htfBiasCalc(), barmerge.gaps_off, barmerge.lookahead_off)
 int htfBias = nz(htfBiasRaw, 0)
 
 f_htfName(int b) =>

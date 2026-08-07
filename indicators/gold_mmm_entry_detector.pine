@@ -118,11 +118,26 @@ londonSess  = input.session("1500-2330", "倫敦 15:00–23:30", group=grpSessio
 nySess      = input.session("2130-0400", "美盤 21:30–04:00", group=grpSession)
 
 grpUi = "⑥ 顯示"
-showLevels   = input.bool(true, "訊號顯示停損/停利", group=grpUi)
-showBg       = input.bool(true, "依模型上色背景", group=grpUi)
-showBands    = input.bool(true, "顯示盤整通道", group=grpUi)
+showLevels    = input.bool(true, "訊號顯示停損/停利", group=grpUi)
+showBg        = input.bool(true, "依模型上色背景", group=grpUi)
+showBands     = input.bool(true, "顯示盤整通道", group=grpUi)
 showTrendDash = input.bool(true, "顯示趨勢面板", group=grpUi)
+trendDashPos  = input.string("右上", "趨勢面板位置", options=["左上", "中上", "右上", "左中", "右中", "左下", "中下", "右下"], group=grpUi)
 showRangeDash = input.bool(true, "顯示盤整專屬面板", group=grpUi)
+rangeDashPos  = input.string("左上", "盤整面板位置", options=["左上", "中上", "右上", "左中", "右中", "左下", "中下", "右下"], group=grpUi)
+
+// 面板位置對照
+f_panelPos(p) =>
+    switch p
+        "左上" => position.top_left
+        "中上" => position.top_center
+        "右上" => position.top_right
+        "左中" => position.middle_left
+        "右中" => position.middle_right
+        "左下" => position.bottom_left
+        "中下" => position.bottom_center
+        "右下" => position.bottom_right
+        => position.top_right
 
 // ═══════════════════════════════════════════════════════════
 // 基礎計算
@@ -362,83 +377,105 @@ alertcondition(rangeShortFire, title="盤整做空", message="黃金MMM 盤整�
 alertcondition(trendLongFire or trendShortFire or rangeLongFire or rangeShortFire, title="任一進場", message="黃金MMM 進場 | {{ticker}} @ {{close}}")
 
 // ═══════════════════════════════════════════════════════════
-// 趨勢面板（右上）
+// 趨勢面板
 // ═══════════════════════════════════════════════════════════
-var table trendDash = table.new(position.top_right, 2, 9, bgcolor=color.new(#102027, 10), border_width=1)
-if showTrendDash and barstate.islast
-    table.cell(trendDash, 0, 0, "趨勢模型", text_color=color.white, text_size=size.small)
-    table.cell(trendDash, 1, 0, activeModel, text_color=activeModel == "趨勢" ? color.lime : color.gray, text_size=size.small)
-    table.cell(trendDash, 0, 1, "方向", text_color=color.gray, text_size=size.small)
-    table.cell(trendDash, 1, 1, bullTrend ? "多頭" : bearTrend ? "空頭" : "中性", text_color=bullTrend ? color.lime : bearTrend ? color.red : color.orange, text_size=size.small)
-    table.cell(trendDash, 0, 2, "環境", text_color=color.gray, text_size=size.small)
-    table.cell(trendDash, 1, 2, enableTrend ? "可做趨勢" : "停用", text_color=enableTrend ? color.lime : color.gray, text_size=size.small)
-    table.cell(trendDash, 0, 3, "高週期", text_color=color.gray, text_size=size.small)
-    table.cell(trendDash, 1, 3, not useMtf ? "關" : (htf1Bull ? "多" : "空") + "/" + (not useHtf2 ? "-" : htf2Bull ? "多" : "空"), text_color=color.white, text_size=size.small)
-    table.cell(trendDash, 0, 4, "ADX/CHOP", text_color=color.gray, text_size=size.small)
-    table.cell(trendDash, 1, 4, str.tostring(adxVal, "#.0") + "/" + str.tostring(chopVal, "#.0"), text_color=color.white, text_size=size.small)
-    table.cell(trendDash, 0, 5, "時段", text_color=color.gray, text_size=size.small)
-    table.cell(trendDash, 1, 5, sessionOk ? sessionName : sessionName + "·休", text_color=sessionOk ? color.lime : color.red, text_size=size.small)
-    table.cell(trendDash, 0, 6, "多分/空分", text_color=color.gray, text_size=size.small)
-    table.cell(trendDash, 1, 6, str.tostring(tScoreL) + " / " + str.tostring(tScoreS), text_color=color.white, text_size=size.small)
-    table.cell(trendDash, 0, 7, "狀態", text_color=color.gray, text_size=size.small)
-    tReady = trendLongFire ? "趨多" : trendShortFire ? "趨空" : enableTrend ? "等待" : "—"
-    table.cell(trendDash, 1, 7, tReady, text_color=trendLongFire ? color.lime : trendShortFire ? color.red : color.gray, text_size=size.small)
-    table.cell(trendDash, 0, 8, "模式", text_color=color.gray, text_size=size.small)
-    table.cell(trendDash, 1, 8, modelMode, text_color=color.aqua, text_size=size.small)
+var table trendDash = na
+var string trendPosPrev = na
+if showTrendDash
+    if na(trendDash) or trendPosPrev != trendDashPos
+        if not na(trendDash)
+            table.delete(trendDash)
+        trendDash := table.new(f_panelPos(trendDashPos), 2, 9, bgcolor=color.new(#102027, 10), border_width=1)
+        trendPosPrev := trendDashPos
+    if barstate.islast
+        table.cell(trendDash, 0, 0, "趨勢模型", text_color=color.white, text_size=size.small)
+        table.cell(trendDash, 1, 0, activeModel, text_color=activeModel == "趨勢" ? color.lime : color.gray, text_size=size.small)
+        table.cell(trendDash, 0, 1, "方向", text_color=color.gray, text_size=size.small)
+        table.cell(trendDash, 1, 1, bullTrend ? "多頭" : bearTrend ? "空頭" : "中性", text_color=bullTrend ? color.lime : bearTrend ? color.red : color.orange, text_size=size.small)
+        table.cell(trendDash, 0, 2, "環境", text_color=color.gray, text_size=size.small)
+        table.cell(trendDash, 1, 2, enableTrend ? "可做趨勢" : "停用", text_color=enableTrend ? color.lime : color.gray, text_size=size.small)
+        table.cell(trendDash, 0, 3, "高週期", text_color=color.gray, text_size=size.small)
+        table.cell(trendDash, 1, 3, not useMtf ? "關" : (htf1Bull ? "多" : "空") + "/" + (not useHtf2 ? "-" : htf2Bull ? "多" : "空"), text_color=color.white, text_size=size.small)
+        table.cell(trendDash, 0, 4, "ADX/CHOP", text_color=color.gray, text_size=size.small)
+        table.cell(trendDash, 1, 4, str.tostring(adxVal, "#.0") + "/" + str.tostring(chopVal, "#.0"), text_color=color.white, text_size=size.small)
+        table.cell(trendDash, 0, 5, "時段", text_color=color.gray, text_size=size.small)
+        table.cell(trendDash, 1, 5, sessionOk ? sessionName : sessionName + "·休", text_color=sessionOk ? color.lime : color.red, text_size=size.small)
+        table.cell(trendDash, 0, 6, "多分/空分", text_color=color.gray, text_size=size.small)
+        table.cell(trendDash, 1, 6, str.tostring(tScoreL) + " / " + str.tostring(tScoreS), text_color=color.white, text_size=size.small)
+        table.cell(trendDash, 0, 7, "狀態", text_color=color.gray, text_size=size.small)
+        tReady = trendLongFire ? "趨多" : trendShortFire ? "趨空" : enableTrend ? "等待" : "—"
+        table.cell(trendDash, 1, 7, tReady, text_color=trendLongFire ? color.lime : trendShortFire ? color.red : color.gray, text_size=size.small)
+        table.cell(trendDash, 0, 8, "模式", text_color=color.gray, text_size=size.small)
+        table.cell(trendDash, 1, 8, modelMode, text_color=color.aqua, text_size=size.small)
+else if not na(trendDash)
+    table.delete(trendDash)
+    trendDash := na
+    trendPosPrev := na
 
 // ═══════════════════════════════════════════════════════════
-// 盤整模型專屬面板（左上）— 條件清單 + 過濾狀態
+// 盤整模型專屬面板 — 條件清單 + 過濾狀態
 // ═══════════════════════════════════════════════════════════
 fOk(cond) => cond ? "✓" : "✗"
 fCol(cond) => cond ? color.lime : color.red
 
-var table rangeDash = table.new(position.top_left, 2, 16, bgcolor=color.new(#3E2723, 8), border_width=1)
-if showRangeDash and barstate.islast
-    table.cell(rangeDash, 0, 0, "盤整模型面板", text_color=color.white, text_size=size.small)
-    table.cell(rangeDash, 1, 0, enableRange ? "啟用中" : "待機", text_color=enableRange ? color.lime : color.gray, text_size=size.small)
+var table rangeDash = na
+var string rangePosPrev = na
+if showRangeDash
+    if na(rangeDash) or rangePosPrev != rangeDashPos
+        if not na(rangeDash)
+            table.delete(rangeDash)
+        rangeDash := table.new(f_panelPos(rangeDashPos), 2, 16, bgcolor=color.new(#3E2723, 8), border_width=1)
+        rangePosPrev := rangeDashPos
+    if barstate.islast
+        table.cell(rangeDash, 0, 0, "盤整模型面板", text_color=color.white, text_size=size.small)
+        table.cell(rangeDash, 1, 0, enableRange ? "啟用中" : "待機", text_color=enableRange ? color.lime : color.gray, text_size=size.small)
 
-    table.cell(rangeDash, 0, 1, "— 環境過濾 —", text_color=color.orange, text_size=size.small)
-    table.cell(rangeDash, 1, 1, str.tostring(rangeConfirmScore) + "/4", text_color=rangeEnvOk ? color.lime : color.orange, text_size=size.small)
+        table.cell(rangeDash, 0, 1, "— 環境過濾 —", text_color=color.orange, text_size=size.small)
+        table.cell(rangeDash, 1, 1, str.tostring(rangeConfirmScore) + "/4", text_color=rangeEnvOk ? color.lime : color.orange, text_size=size.small)
 
-    table.cell(rangeDash, 0, 2, "ADX≤" + str.tostring(adxMaxRange, "#"), text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 2, fOk(rngCondAdx) + " " + str.tostring(adxVal, "#.0"), text_color=fCol(rngCondAdx), text_size=size.small)
+        table.cell(rangeDash, 0, 2, "ADX≤" + str.tostring(adxMaxRange, "#"), text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 2, fOk(rngCondAdx) + " " + str.tostring(adxVal, "#.0"), text_color=fCol(rngCondAdx), text_size=size.small)
 
-    table.cell(rangeDash, 0, 3, "CHOP≥" + str.tostring(chopMinRange, "#"), text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 3, fOk(rngCondChop) + " " + str.tostring(chopVal, "#.0"), text_color=fCol(rngCondChop), text_size=size.small)
+        table.cell(rangeDash, 0, 3, "CHOP≥" + str.tostring(chopMinRange, "#"), text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 3, fOk(rngCondChop) + " " + str.tostring(chopVal, "#.0"), text_color=fCol(rngCondChop), text_size=size.small)
 
-    table.cell(rangeDash, 0, 4, "均線糾結", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 4, fOk(rngCondGap) + " " + str.tostring(emaGapAtr, "#.2"), text_color=fCol(rngCondGap), text_size=size.small)
+        table.cell(rangeDash, 0, 4, "均線糾結", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 4, fOk(rngCondGap) + " " + str.tostring(emaGapAtr, "#.2"), text_color=fCol(rngCondGap), text_size=size.small)
 
-    table.cell(rangeDash, 0, 5, "效率比低", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 5, fOk(rngCondEr) + " " + str.tostring(erVal, "#.2"), text_color=fCol(rngCondEr), text_size=size.small)
+        table.cell(rangeDash, 0, 5, "效率比低", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 5, fOk(rngCondEr) + " " + str.tostring(erVal, "#.2"), text_color=fCol(rngCondEr), text_size=size.small)
 
-    table.cell(rangeDash, 0, 6, "通道寬度", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 6, fOk(widthOk) + " " + str.tostring(rangeWidthAtr, "#.1") + "ATR", text_color=fCol(widthOk), text_size=size.small)
+        table.cell(rangeDash, 0, 6, "通道寬度", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 6, fOk(widthOk) + " " + str.tostring(rangeWidthAtr, "#.1") + "ATR", text_color=fCol(widthOk), text_size=size.small)
 
-    table.cell(rangeDash, 0, 7, "時段/波動", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 7, fOk(sessionOk) + "/" + fOk(volOk) + " " + sessionName, text_color=sessionOk and volOk ? color.lime : color.red, text_size=size.small)
+        table.cell(rangeDash, 0, 7, "時段/波動", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 7, fOk(sessionOk) + "/" + fOk(volOk) + " " + sessionName, text_color=sessionOk and volOk ? color.lime : color.red, text_size=size.small)
 
-    table.cell(rangeDash, 0, 8, "— 做多條件 —", text_color=color.orange, text_size=size.small)
-    table.cell(rangeDash, 1, 8, str.tostring(rScoreL) + "/7", text_color=rScoreL >= minRangeScore ? color.lime : color.orange, text_size=size.small)
+        table.cell(rangeDash, 0, 8, "— 做多條件 —", text_color=color.orange, text_size=size.small)
+        table.cell(rangeDash, 1, 8, str.tostring(rScoreL) + "/7", text_color=rScoreL >= minRangeScore ? color.lime : color.orange, text_size=size.small)
 
-    table.cell(rangeDash, 0, 9, "觸下軌", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 9, fOk(touchLower), text_color=fCol(touchLower), text_size=size.small)
+        table.cell(rangeDash, 0, 9, "觸下軌", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 9, fOk(touchLower), text_color=fCol(touchLower), text_size=size.small)
 
-    table.cell(rangeDash, 0, 10, "RSI超賣/拒絕K", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 10, fOk(rsiRangeLong) + "/" + fOk(rejectLongOk) + " " + str.tostring(rsiVal, "#.0"), text_color=rsiRangeLong and rejectLongOk ? color.lime : color.red, text_size=size.small)
+        table.cell(rangeDash, 0, 10, "RSI超賣/拒絕K", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 10, fOk(rsiRangeLong) + "/" + fOk(rejectLongOk) + " " + str.tostring(rsiVal, "#.0"), text_color=rsiRangeLong and rejectLongOk ? color.lime : color.red, text_size=size.small)
 
-    table.cell(rangeDash, 0, 11, "Stoch/回通道", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 11, fOk(stochLongOk) + "/" + fOk(closeInLongOk and noBreakout), text_color=stochLongOk and closeInLongOk and noBreakout ? color.lime : color.red, text_size=size.small)
+        table.cell(rangeDash, 0, 11, "Stoch/回通道", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 11, fOk(stochLongOk) + "/" + fOk(closeInLongOk and noBreakout), text_color=stochLongOk and closeInLongOk and noBreakout ? color.lime : color.red, text_size=size.small)
 
-    table.cell(rangeDash, 0, 12, "— 做空條件 —", text_color=color.orange, text_size=size.small)
-    table.cell(rangeDash, 1, 12, str.tostring(rScoreS) + "/7", text_color=rScoreS >= minRangeScore ? color.lime : color.orange, text_size=size.small)
+        table.cell(rangeDash, 0, 12, "— 做空條件 —", text_color=color.orange, text_size=size.small)
+        table.cell(rangeDash, 1, 12, str.tostring(rScoreS) + "/7", text_color=rScoreS >= minRangeScore ? color.lime : color.orange, text_size=size.small)
 
-    table.cell(rangeDash, 0, 13, "觸上軌", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 13, fOk(touchUpper), text_color=fCol(touchUpper), text_size=size.small)
+        table.cell(rangeDash, 0, 13, "觸上軌", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 13, fOk(touchUpper), text_color=fCol(touchUpper), text_size=size.small)
 
-    table.cell(rangeDash, 0, 14, "RSI超買/拒絕K", text_color=color.gray, text_size=size.small)
-    table.cell(rangeDash, 1, 14, fOk(rsiRangeShort) + "/" + fOk(rejectShortOk) + " " + str.tostring(rsiVal, "#.0"), text_color=rsiRangeShort and rejectShortOk ? color.lime : color.red, text_size=size.small)
+        table.cell(rangeDash, 0, 14, "RSI超買/拒絕K", text_color=color.gray, text_size=size.small)
+        table.cell(rangeDash, 1, 14, fOk(rsiRangeShort) + "/" + fOk(rejectShortOk) + " " + str.tostring(rsiVal, "#.0"), text_color=rsiRangeShort and rejectShortOk ? color.lime : color.red, text_size=size.small)
 
-    table.cell(rangeDash, 0, 15, "盤整狀態", text_color=color.gray, text_size=size.small)
-    rReady = rangeLongFire ? "盤多進場" : rangeShortFire ? "盤空進場" : enableRange ? "等待觸軌" : "非盤整"
-    table.cell(rangeDash, 1, 15, rReady, text_color=rangeLongFire ? color.lime : rangeShortFire ? color.red : enableRange ? color.orange : color.gray, text_size=size.small)
+        table.cell(rangeDash, 0, 15, "盤整狀態", text_color=color.gray, text_size=size.small)
+        rReady = rangeLongFire ? "盤多進場" : rangeShortFire ? "盤空進場" : enableRange ? "等待觸軌" : "非盤整"
+        table.cell(rangeDash, 1, 15, rReady, text_color=rangeLongFire ? color.lime : rangeShortFire ? color.red : enableRange ? color.orange : color.gray, text_size=size.small)
+else if not na(rangeDash)
+    table.delete(rangeDash)
+    rangeDash := na
+    rangePosPrev := na

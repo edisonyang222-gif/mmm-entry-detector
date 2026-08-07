@@ -188,7 +188,7 @@ f_addOrMergePool(float lvl, bool isHigh, float vol, int pivBar) =>
             if countAlive() < maxLiqPools
                 break
             f_killOldest()
-        label style_ = isHigh ? label.style_label_down : label.style_label_up
+        string style_ = isHigh ? label.style_label_down : label.style_label_up
         color bg = isHigh ? color.new(color.fuchsia, 20) : color.new(color.aqua, 20)
         label lbNew = label.new(pivTime, lvl, f_fmtPool(isHigh, vol), xloc=xloc.bar_time, yloc=yloc.price, style=style_, color=bg, textcolor=color.white, size=size.small)
         array.push(liqPrice, lvl)

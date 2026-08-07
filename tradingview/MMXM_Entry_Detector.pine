@@ -18,7 +18,10 @@ bool   usePo3 = input.bool(true, "啟用PO3（AMD）判別", group="PO3 Power of
 string po3Tf = input.timeframe("D", "PO3參考週期", group="PO3 Power of Three", tooltip="常用日線 D：以當日開盤為錨，判斷當日PO3階段")
 int    po3MinAccBars = input.int(3, "累積最少根數", minval=1, group="PO3 Power of Three")
 bool   po3Filter = input.bool(false, "進場需在派發階段且同向", group="PO3 Power of Three", tooltip="開啟後：多單需PO3派發偏多、空單需派發偏空。選PO3派發進場時自動啟用。")
-bool   showPo3Bg = input.bool(false, "PO3階段背景色（可選）", group="PO3 Power of Three")
+bool   showPo3Zones = input.bool(true, "顯示累積/操控區間底色", group="PO3 Power of Three")
+bool   showPo3Tip = input.bool(true, "派發前三角提示進場", group="PO3 Power of Three")
+color  po3AccCol = input.color(color.new(#42a5f5, 82), "累積區底色", group="PO3 Power of Three")
+color  po3ManCol = input.color(color.new(#ef5350, 82), "操控區底色", group="PO3 Power of Three")
 
 // ===== HTF → LTF 多週期 =====
 bool   useHtfFilter = input.bool(true, "啟用高週期(HTF)偏向過濾", group="HTF→LTF多週期", tooltip="僅在高週期偏向與低週期進場方向一致時才出訊號。ERT模式建議開啟。")
@@ -254,6 +257,7 @@ f_dolAllows(bool isBuy) =>
         isBuy ? dolDir > 0 : dolDir < 0
 
 // ----- PO3 Power of Three：Accumulation → Manipulation → Distribution -----
+// 視覺：累積區底色、操控區底色、派發前三角提示進場
 int PO3_OFF = 0
 int PO3_ACC = 1
 int PO3_MAN = 2
@@ -268,7 +272,17 @@ var float po3O = float(na)
 var float po3AccHi = float(na)
 var float po3AccLo = float(na)
 var float po3ManExt = float(na)
+var float po3ManInner = float(na)
 var int po3AccBars = 0
+var int po3AccStart = na
+var int po3ManStart = na
+var box po3AccBox = na
+var box po3ManBox = na
+var bool po3TipBuy = false
+var bool po3TipSell = false
+
+po3TipBuy := false
+po3TipSell := false
 
 if usePo3
     if po3NewPeriod or na(po3O)
@@ -278,45 +292,82 @@ if usePo3
         po3Phase := PO3_ACC
         po3Dir := 0
         po3ManExt := float(na)
+        po3ManInner := float(na)
         po3AccBars := 1
+        po3AccStart := bar_index
+        po3ManStart := na
+        po3AccBox := na
+        po3ManBox := na
+        if showPo3Zones
+            po3AccBox := box.new(bar_index, high, bar_index, low, xloc=xloc.bar_index, bgcolor=po3AccCol, border_color=color.new(#1565c0, 40), border_width=1, text="累積", text_size=size.tiny, text_color=color.new(#0d47a1, 0))
     else if po3Phase == PO3_ACC
-        // 先判斷是否掃出累積區間，再更新區間（避免自取消）
-        if po3AccBars >= po3MinAccBars and not na(po3AccLo) and low < po3AccLo
+        bool goManDown = po3AccBars >= po3MinAccBars and not na(po3AccLo) and low < po3AccLo
+        bool goManUp = po3AccBars >= po3MinAccBars and not na(po3AccHi) and high > po3AccHi
+        if not goManDown and not goManUp and po3AccBars >= po3MinAccBars and not na(po3O)
+            goManDown := low < po3O and low <= po3AccLo
+            goManUp := high > po3O and high >= po3AccHi
+        if goManDown
             po3Phase := PO3_MAN
             po3Dir := 1
             po3ManExt := low
-        else if po3AccBars >= po3MinAccBars and not na(po3AccHi) and high > po3AccHi
+            po3ManInner := po3AccLo
+            po3ManStart := bar_index
+            if showPo3Zones and not na(po3AccBox)
+                box.set_right(po3AccBox, bar_index)
+                box.set_top(po3AccBox, po3AccHi)
+                box.set_bottom(po3AccBox, po3AccLo)
+            if showPo3Zones
+                po3ManBox := box.new(bar_index, math.max(po3ManInner, low), bar_index, math.min(po3ManInner, low), xloc=xloc.bar_index, bgcolor=po3ManCol, border_color=color.new(#c62828, 40), border_width=1, text="操控", text_size=size.tiny, text_color=color.new(#b71c1c, 0))
+        else if goManUp
             po3Phase := PO3_MAN
             po3Dir := -1
             po3ManExt := high
+            po3ManInner := po3AccHi
+            po3ManStart := bar_index
+            if showPo3Zones and not na(po3AccBox)
+                box.set_right(po3AccBox, bar_index)
+                box.set_top(po3AccBox, po3AccHi)
+                box.set_bottom(po3AccBox, po3AccLo)
+            if showPo3Zones
+                po3ManBox := box.new(bar_index, math.max(po3ManInner, high), bar_index, math.min(po3ManInner, high), xloc=xloc.bar_index, bgcolor=po3ManCol, border_color=color.new(#c62828, 40), border_width=1, text="操控", text_size=size.tiny, text_color=color.new(#b71c1c, 0))
         else
             po3AccHi := math.max(po3AccHi, high)
             po3AccLo := math.min(po3AccLo, low)
-            // 相對開盤的 Judas 也可觸發操控
-            if po3AccBars >= po3MinAccBars and not na(po3O)
-                if low < po3O and low <= po3AccLo
-                    po3Phase := PO3_MAN
-                    po3Dir := 1
-                    po3ManExt := low
-                else if high > po3O and high >= po3AccHi
-                    po3Phase := PO3_MAN
-                    po3Dir := -1
-                    po3ManExt := high
-            if po3Phase == PO3_ACC
-                po3AccBars := po3AccBars + 1
+            po3AccBars := po3AccBars + 1
+            if showPo3Zones
+                if na(po3AccBox)
+                    po3AccBox := box.new(po3AccStart, po3AccHi, bar_index, po3AccLo, xloc=xloc.bar_index, bgcolor=po3AccCol, border_color=color.new(#1565c0, 40), border_width=1, text="累積", text_size=size.tiny, text_color=color.new(#0d47a1, 0))
+                else
+                    box.set_right(po3AccBox, bar_index)
+                    box.set_top(po3AccBox, po3AccHi)
+                    box.set_bottom(po3AccBox, po3AccLo)
     else if po3Phase == PO3_MAN
         if po3Dir > 0
             if not na(po3ManExt) and low < po3ManExt
                 po3ManExt := low
+            if showPo3Zones and not na(po3ManBox) and not na(po3ManInner)
+                box.set_right(po3ManBox, bar_index)
+                box.set_top(po3ManBox, po3ManInner)
+                box.set_bottom(po3ManBox, po3ManExt)
             bool reclaim = close > po3O or (not na(po3AccHi) and close > po3AccHi)
             if reclaim and (f_isDisp(true) or close > open)
                 po3Phase := PO3_DIST
+                po3TipBuy := true
+                if showPo3Zones and not na(po3ManBox)
+                    box.set_right(po3ManBox, bar_index)
         else if po3Dir < 0
             if not na(po3ManExt) and high > po3ManExt
                 po3ManExt := high
+            if showPo3Zones and not na(po3ManBox) and not na(po3ManInner)
+                box.set_right(po3ManBox, bar_index)
+                box.set_top(po3ManBox, po3ManExt)
+                box.set_bottom(po3ManBox, po3ManInner)
             bool reclaim = close < po3O or (not na(po3AccLo) and close < po3AccLo)
             if reclaim and (f_isDisp(false) or close < open)
                 po3Phase := PO3_DIST
+                po3TipSell := true
+                if showPo3Zones and not na(po3ManBox)
+                    box.set_right(po3ManBox, bar_index)
 
 f_po3Name() =>
     if not usePo3

@@ -49,6 +49,27 @@ string targetPriority = input.string("未掃流動性→EQ→IPDA", "目標優�
 float  eqTolAtr = input.float(0.15, "EQH/EQL容差（×ATR）", minval=0.01, step=0.05, group="④目標演算法")
 bool   targetRequireLevel = input.bool(false, "進場需已算出演算法目標", group="④目標演算法", tooltip="開啟後：找不到未掃/EQ/IPDA目標則不進場")
 
+// ===== 反轉訊號 + 過濾系統 =====
+bool   useRevSignal = input.bool(true, "啟用反轉訊號", group="反轉訊號", tooltip="流動性掃蕩後 CISD/位移 反轉；獨立於 MMXM 延續進場")
+bool   showRevMarkers = input.bool(true, "顯示反轉標記", group="反轉訊號")
+bool   revRegisterErt = input.bool(true, "反轉寫入E/R/T表", group="反轉訊號")
+int    revSwingLen = input.int(5, "反轉結構回看根數", minval=2, maxval=30, group="反轉訊號")
+int    revCooldown = input.int(12, "反轉冷卻根數", minval=1, maxval=100, group="反轉訊號", tooltip="同向反轉訊號最短間隔")
+float  revStopAtr = input.float(0.2, "反轉停損緩衝（×ATR）", minval=0.0, step=0.05, group="反轉訊號")
+float  revTargetRR = input.float(2.0, "反轉目標報酬比", minval=0.5, step=0.5, group="反轉訊號")
+// 過濾系統（各自勾選）
+bool   revFiltLiq = input.bool(true, "過濾：需BSL/SSL掃蕩", group="反轉過濾系統", tooltip="多=已掃SSL；空=已掃BSL")
+bool   revFiltCisd = input.bool(true, "過濾：需CISD", group="反轉過濾系統")
+bool   revFiltDisp = input.bool(true, "過濾：需位移K", group="反轉過濾系統")
+bool   revFiltFvg = input.bool(true, "過濾：需FVG", group="反轉過濾系統")
+bool   revFiltMss = input.bool(false, "過濾：需MSS/結構翻轉", group="反轉過濾系統", tooltip="收破近期擺動高低")
+bool   revFiltHtf = input.bool(true, "過濾：HTF同向", group="反轉過濾系統")
+bool   revFiltKz = input.bool(true, "過濾：需在Killzone", group="反轉過濾系統")
+bool   revFiltTime = input.bool(false, "過濾：套用①時間模組", group="反轉過濾系統")
+bool   revFiltModules = input.bool(false, "過濾：套用四大模組全開條件", group="反轉過濾系統")
+bool   revFiltMutex = input.bool(true, "過濾：與當根趨勢進場互斥", group="反轉過濾系統", tooltip="同根已有ALG/MMXM進場則不出反轉")
+int    revMinScore = input.int(3, "過濾最低分數", minval=1, maxval=8, group="反轉過濾系統", tooltip="掃蕩/CISD/位移/FVG/MSS/HTF/KZ/時間 各1分")
+
 // ===== ICT 合流（Killzone / IPDA / 計分）=====
 bool   useAlgo = input.bool(true, "啟用ICT合流計分", group="ICT合流", tooltip="Killzone + HTF + PO3 + 模組狀態 合流計分（可與四大模組並用）")
 string algoTz = input.string("America/New_York", "Killzone時區", options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Taipei", "UTC"], group="ICT合流")
@@ -333,8 +354,9 @@ float liqPl = ta.pivotlow(low, liqPivotLen, liqPivotLen)
 
 bool sslSweepNow = false
 bool bslSweepNow = false
+bool trackLiqPools = useLiqAlgo or useRevSignal
 
-if useLiqAlgo
+if trackLiqPools
     if not na(liqPh)
         bool phExists = false
         int nB = array.size(bslPool)
@@ -394,8 +416,8 @@ if useLiqAlgo
                     lastSslLevel := float(na)
                 break
 
-bool sslSweptActive = useLiqAlgo and not na(lastSslSweepBar) and (bar_index - lastSslSweepBar) <= liqValidBars
-bool bslSweptActive = useLiqAlgo and not na(lastBslSweepBar) and (bar_index - lastBslSweepBar) <= liqValidBars
+bool sslSweptActive = trackLiqPools and not na(lastSslSweepBar) and (bar_index - lastSslSweepBar) <= liqValidBars
+bool bslSweptActive = trackLiqPools and not na(lastBslSweepBar) and (bar_index - lastBslSweepBar) <= liqValidBars
 
 f_liqAllows(bool isBuy) =>
     if not liqFilterOn
@@ -1344,6 +1366,136 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 lastBslSweepBar := na
                 lastBslLevel := float(na)
 
+// ----- 反轉訊號 + 過濾系統 -----
+// 原始結構：掃對側流動性 → CISD/位移（可選FVG/MSS）→ 反向進場
+var int lastRevBuyBar = na
+var int lastRevSellBar = na
+var bool revBuySignal = false
+var bool revSellSignal = false
+var float revBuyRR = float(na)
+var float revSellRR = float(na)
+var string revStatus = "關閉"
+
+revBuySignal := false
+revSellSignal := false
+
+float revSwingHi = ta.highest(high, revSwingLen)[1]
+float revSwingLo = ta.lowest(low, revSwingLen)[1]
+bool revMssBuy = not na(revSwingHi) and close > revSwingHi
+bool revMssSell = not na(revSwingLo) and close < revSwingLo
+bool revCisdBuy = f_cisdBull()
+bool revCisdSell = f_cisdBear()
+bool revDispBuy = f_isDisp(true)
+bool revDispSell = f_isDisp(false)
+bool revFvgBuy = f_hasBullFvg()
+bool revFvgSell = f_hasBearFvg()
+bool revLiqBuy = sslSweptActive or sslSweepNow
+bool revLiqSell = bslSweptActive or bslSweepNow
+
+f_revScore(bool isBuy) =>
+    int sc = 0
+    if isBuy ? revLiqBuy : revLiqSell
+        sc += 1
+    if isBuy ? revCisdBuy : revCisdSell
+        sc += 1
+    if isBuy ? revDispBuy : revDispSell
+        sc += 1
+    if isBuy ? revFvgBuy : revFvgSell
+        sc += 1
+    if isBuy ? revMssBuy : revMssSell
+        sc += 1
+    if f_htfAllows(isBuy)
+        sc += 1
+    if inKillzone
+        sc += 1
+    if f_timeAllows(isBuy)
+        sc += 1
+    sc
+
+f_revHardPass(bool isBuy) =>
+    bool ok = true
+    if revFiltLiq
+        ok := ok and (isBuy ? revLiqBuy : revLiqSell)
+    if revFiltCisd
+        ok := ok and (isBuy ? revCisdBuy : revCisdSell)
+    if revFiltDisp
+        ok := ok and (isBuy ? revDispBuy : revDispSell)
+    if revFiltFvg
+        ok := ok and (isBuy ? revFvgBuy : revFvgSell)
+    if revFiltMss
+        ok := ok and (isBuy ? revMssBuy : revMssSell)
+    if revFiltHtf
+        ok := ok and f_htfAllows(isBuy)
+    if revFiltKz
+        ok := ok and inKillzone
+    if revFiltTime
+        ok := ok and f_timeAllows(isBuy)
+    if revFiltModules
+        ok := ok and f_modulesPass(isBuy)
+    ok and f_revScore(isBuy) >= revMinScore
+
+f_revStatus() =>
+    if not useRevSignal
+        "關閉"
+    else
+        int sb = f_revScore(true)
+        int ss = f_revScore(false)
+        string side = sb > ss ? "偏多反轉" : ss > sb ? "偏空反轉" : "觀望"
+        string gate = f_revHardPass(true) or f_revHardPass(false) ? "可觸發" : "過濾中"
+        gate + " " + side + " " + str.tostring(math.max(sb, ss)) + "/" + str.tostring(revMinScore)
+
+// 原始觸發：至少要有掃蕩跡象 + 結構切換之一（分數/硬過濾再收斂）
+bool revBuyRaw = revLiqBuy and (revCisdBuy or revDispBuy or revMssBuy)
+bool revSellRaw = revLiqSell and (revCisdSell or revDispSell or revMssSell)
+bool revBuyCool = na(lastRevBuyBar) or bar_index - lastRevBuyBar >= revCooldown
+bool revSellCool = na(lastRevSellBar) or bar_index - lastRevSellBar >= revCooldown
+bool revBuyMutex = not revFiltMutex or not buySignal
+bool revSellMutex = not revFiltMutex or not sellSignal
+
+if useRevSignal and bar_index >= math.max(lookback, atrPeriod)
+    if revBuyRaw and f_revHardPass(true) and revBuyCool and revBuyMutex and showBuy
+        revBuySignal := true
+        lastRevBuyBar := bar_index
+        float entry = close
+        float sl = (not na(lastSslLevel) ? math.min(low, lastSslLevel) : low) - revStopAtr * nz(atrVal, 0.0)
+        float risk = entry - sl
+        float tp = entry + risk * revTargetRR
+        if useTargetAlgo
+            [tAlgoR, tTagR] = f_pickBuyTarget(entry)
+            if not na(tAlgoR) and tAlgoR > entry
+                tp := tAlgoR
+        if risk > 0.0 and tp > entry
+            if revRegisterErt
+                revBuyRR := f_registerSetup(true, entry, sl, tp, high, low, high, low, bar_index, bar_index, "反轉多")
+            else
+                revBuyRR := risk > 0.0 ? (tp - entry) / risk : float(na)
+        // 消耗 SSL 掃蕩，避免連發
+        if useLiqAlgo or revFiltLiq
+            lastSslSweepBar := na
+            lastSslLevel := float(na)
+
+    if revSellRaw and f_revHardPass(false) and revSellCool and revSellMutex and showSell and not revBuySignal
+        revSellSignal := true
+        lastRevSellBar := bar_index
+        float entry = close
+        float sl = (not na(lastBslLevel) ? math.max(high, lastBslLevel) : high) + revStopAtr * nz(atrVal, 0.0)
+        float risk = sl - entry
+        float tp = entry - risk * revTargetRR
+        if useTargetAlgo
+            [tAlgoRs, tTagRs] = f_pickSellTarget(entry)
+            if not na(tAlgoRs) and tAlgoRs < entry
+                tp := tAlgoRs
+        if risk > 0.0 and tp < entry
+            if revRegisterErt
+                revSellRR := f_registerSetup(false, entry, sl, tp, high, low, high, low, bar_index, bar_index, "反轉空")
+            else
+                revSellRR := risk > 0.0 ? (entry - tp) / risk : float(na)
+        if useLiqAlgo or revFiltLiq
+            lastBslSweepBar := na
+            lastBslLevel := float(na)
+
+revStatus := f_revStatus()
+
 // ---- 最新訊號數值（只給右上表用；圖上不畫滿版線）----
 float lastEntry = float(na)
 float lastSl = float(na)
@@ -1442,14 +1594,19 @@ plotshape(showMarkers and showSell and sellSignal and isPo3Mode, title="PO3作�
 plotshape(showMarkers and showSell and sellSignal and isErtMode, title="ERT作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="E空")
 plotshape(showMarkers and showSell and sellSignal and not isErtMode and not isPo3Mode and not isAlgoMode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="作空")
 
-// 右上表：四大模組 + 盈虧
-var table info = table.new(position.top_right, 2, 18, bgcolor=color.new(#111111, 15), border_width=1, border_color=color.gray)
+// 反轉訊號標記
+plotshape(showRevMarkers and useRevSignal and revBuySignal, title="反轉作多", style=shape.labelup, location=location.belowbar, color=color.new(#1565c0, 0), size=size.small, text="反轉多", textcolor=color.white)
+plotshape(showRevMarkers and useRevSignal and revSellSignal, title="反轉作空", style=shape.labeldown, location=location.abovebar, color=color.new(#c62828, 0), size=size.small, text="反轉空", textcolor=color.white)
+
+// 右上表：四大模組 + 反轉 + 盈虧
+var table info = table.new(position.top_right, 2, 19, bgcolor=color.new(#111111, 15), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
     color algoCol = algoFilterOn and math.max(f_algoScore(true), f_algoScore(false)) >= algoMinScore ? color.lime : color.orange
     color timeCol = useTimeAlgo and (timeContBuy or timeContSell) ? color.lime : useTimeAlgo ? color.orange : color.gray
     color liqCol = sslSweptActive ? color.teal : bslSweptActive ? color.orange : useLiqAlgo ? color.gray : color.gray
     color dispCol = useDispAlgo and (bDispValid or sDispValid) ? color.lime : useDispAlgo ? color.orange : color.gray
     color tgtCol = useTargetAlgo and (not na(algoBuyTarget) or not na(algoSellTarget)) ? color.lime : useTargetAlgo ? color.orange : color.gray
+    color revCol = revBuySignal or revSellSignal ? color.lime : useRevSignal and (f_revHardPass(true) or f_revHardPass(false)) ? color.aqua : useRevSignal ? color.orange : color.gray
     color po3Col = po3Phase == PO3_DIST ? color.lime : po3Phase == PO3_MAN ? color.orange : po3Phase == PO3_ACC ? color.aqua : color.gray
     color dolCol = dolDir > 0 ? color.teal : dolDir < 0 ? color.orange : color.gray
     table.cell(info, 0, 0, "合流", text_color=color.white, text_size=size.small)
@@ -1462,36 +1619,40 @@ if showInfoTable and barstate.islast
     table.cell(info, 1, 3, f_dispStatus(), text_color=dispCol, text_size=size.small)
     table.cell(info, 0, 4, "④目標", text_color=color.white, text_size=size.small)
     table.cell(info, 1, 4, f_targetStatus(), text_color=tgtCol, text_size=size.small)
-    table.cell(info, 0, 5, "Killzone", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 5, f_kzName(), text_color=inKillzone ? color.lime : color.gray, text_size=size.tiny)
-    table.cell(info, 0, 6, "PO3", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 6, f_po3Name(), text_color=po3Col, text_size=size.small)
-    table.cell(info, 0, 7, "路徑", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 7, f_dolPathName(), text_color=dolCol, text_size=size.small)
-    table.cell(info, 0, 8, "E", text_color=color.aqua, text_size=size.small)
-    table.cell(info, 1, 8, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 9, "R", text_color=color.red, text_size=size.small)
-    table.cell(info, 1, 9, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 10, "T1", text_color=color.yellow, text_size=size.small)
-    table.cell(info, 1, 10, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 11, "T2", text_color=color.lime, text_size=size.small)
-    table.cell(info, 1, 11, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 12, "RR", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 12, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
-    table.cell(info, 0, 13, "HTF", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 5, "反轉", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 5, revStatus, text_color=revCol, text_size=size.small)
+    table.cell(info, 0, 6, "Killzone", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 6, f_kzName(), text_color=inKillzone ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(info, 0, 7, "PO3", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 7, f_po3Name(), text_color=po3Col, text_size=size.small)
+    table.cell(info, 0, 8, "路徑", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 8, f_dolPathName(), text_color=dolCol, text_size=size.small)
+    table.cell(info, 0, 9, "E", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 1, 9, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 10, "R", text_color=color.red, text_size=size.small)
+    table.cell(info, 1, 10, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 11, "T1", text_color=color.yellow, text_size=size.small)
+    table.cell(info, 1, 11, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 12, "T2", text_color=color.lime, text_size=size.small)
+    table.cell(info, 1, 12, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 13, "RR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 13, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
+    table.cell(info, 0, 14, "HTF", text_color=color.gray, text_size=size.tiny)
     color htfCol = htfBias > 0 ? color.teal : htfBias < 0 ? color.orange : color.gray
-    table.cell(info, 1, 13, htfFilterOn ? f_htfName(htfBias) : "關", text_color=htfCol, text_size=size.tiny)
-    table.cell(info, 0, 14, "多階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 14, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 15, "空階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 15, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 16, "掃蕩時效", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 16, f_liqAge(), text_color=liqCol, text_size=size.tiny)
-    table.cell(info, 0, 17, "模型", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 17, showErtChecklist ? entryModel : "-", text_color=color.aqua, text_size=size.tiny)
+    table.cell(info, 1, 14, htfFilterOn ? f_htfName(htfBias) : "關", text_color=htfCol, text_size=size.tiny)
+    table.cell(info, 0, 15, "多階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 15, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 16, "空階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 16, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 17, "掃蕩時效", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 17, f_liqAge(), text_color=liqCol, text_size=size.tiny)
+    table.cell(info, 0, 18, "模型", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 18, showErtChecklist ? entryModel : "-", text_color=color.aqua, text_size=size.tiny)
 
 alertcondition(buySignal, "作多進場", "ICT 演算法/MMXM 作多進場")
 alertcondition(sellSignal, "作空進場", "ICT 演算法/MMXM 作空進場")
+alertcondition(revBuySignal, "反轉作多", "反轉訊號：流動性掃蕩後作多反轉（已過過濾）")
+alertcondition(revSellSignal, "反轉作空", "反轉訊號：流動性掃蕩後作空反轉（已過過濾）")
 alertcondition(po3TipBuy, "PO3派發進場多", "PO3 操控結束，派發前提示作多")
 alertcondition(po3TipSell, "PO3派發進場空", "PO3 操控結束，派發前提示作空")
 alertcondition(useAlgo and inKillzone, "Killzone開啟", "目前位於ICT Killzone")

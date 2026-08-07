@@ -111,12 +111,13 @@ bool   erlIrlFilter = input.bool(false, "進場需順DOL方向", group="ERL/IRL�
 
 // ===== ERT 交易系統（Entry / Risk / Target）=====
 bool   ertRequireHtf = input.bool(true, "ERT強制要求HTF同向", group="ERT交易系統")
-float  ertT1RR = input.float(1.0, "T1 部分目標（報酬比）", minval=0.5, step=0.5, group="ERT交易系統")
+float  ertT1RR = input.float(1.0, "T1 第一目標報酬比（相對風險R）", minval=0.5, step=0.5, group="ERT交易系統", tooltip="T1 = 進場價 ±（進場到停損的距離 × 此倍數）。例：1.0 = 先到 1R 部分停利")
 bool   showErtChecklist = input.bool(true, "狀態表顯示模型列", group="ERT交易系統")
+bool   showErtFullLabels = input.bool(true, "面板E/R/T用完整中文標籤", group="ERT交易系統", tooltip="開啟：顯示「E進場價／R停損／T1第一目標／T2第二目標」；關閉：只顯示 E/R/T1/T2")
 
 // ===== 盈虧比 / 停損停利 =====
-string tpMode = input.string("兩者取遠", "停利計算方式", options=["固定報酬比", "結構投射", "兩者取遠"], group="盈虧設定", tooltip="固定報酬比=進場±風險×目標倍數；結構投射=掃蕩深度投射；兩者取遠=取較遠目標（報酬比較高）")
-float  targetRR = input.float(2.0, "目標報酬比（1:X）= T2", minval=0.5, step=0.5, group="盈虧設定")
+string tpMode = input.string("兩者取遠", "停利計算方式", options=["固定報酬比", "結構投射", "兩者取遠"], group="盈虧設定", tooltip="決定 T2 第二目標怎麼算：固定報酬比=進場±風險×目標倍數；結構投射=掃蕩深度投射；兩者取遠=取較遠目標")
+float  targetRR = input.float(2.0, "T2 第二目標報酬比（1:X）", minval=0.5, step=0.5, group="盈虧設定", tooltip="T2 = 進場價 ±（進場到停損距離 × 此倍數）。開啟④目標演算法時，T2 可改為未掃流動性/EQ/IPDA")
 float  minRR = input.float(1.5, "最小可接受報酬比", minval=0.5, step=0.1, group="盈虧設定", tooltip="算出來的實際RR低於此值，整筆設定作廢")
 float  stopBufAtrMult = input.float(0.05, "停損緩衝（×ATR）", minval=0.0, step=0.01, group="盈虧設定")
 
@@ -1627,15 +1628,15 @@ if showInfoTable and barstate.islast
     table.cell(info, 1, 7, f_po3Name(), text_color=po3Col, text_size=size.small)
     table.cell(info, 0, 8, "路徑", text_color=color.white, text_size=size.small)
     table.cell(info, 1, 8, f_dolPathName(), text_color=dolCol, text_size=size.small)
-    table.cell(info, 0, 9, "E", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 0, 9, showErtFullLabels ? "E 進場價" : "E", text_color=color.aqua, text_size=size.small)
     table.cell(info, 1, 9, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 10, "R", text_color=color.red, text_size=size.small)
+    table.cell(info, 0, 10, showErtFullLabels ? "R 停損" : "R", text_color=color.red, text_size=size.small)
     table.cell(info, 1, 10, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 11, "T1", text_color=color.yellow, text_size=size.small)
+    table.cell(info, 0, 11, showErtFullLabels ? "T1 第一目標" : "T1", text_color=color.yellow, text_size=size.small)
     table.cell(info, 1, 11, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 12, "T2", text_color=color.lime, text_size=size.small)
+    table.cell(info, 0, 12, showErtFullLabels ? "T2 第二目標" : "T2", text_color=color.lime, text_size=size.small)
     table.cell(info, 1, 12, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 13, "RR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 0, 13, showErtFullLabels ? "RR 報酬比" : "RR", text_color=color.gray, text_size=size.small)
     table.cell(info, 1, 13, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
     table.cell(info, 0, 14, "HTF", text_color=color.gray, text_size=size.tiny)
     color htfCol = htfBias > 0 ? color.teal : htfBias < 0 ? color.orange : color.gray

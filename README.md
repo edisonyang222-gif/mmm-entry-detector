@@ -77,7 +77,7 @@ python3 backtest/gold_mmm_backtest.py --symbol GC=F --interval 1h --period 2y --
 ## 實盤檢查清單
 
 - [ ] 高週期1、高週期2 與訊號同向（儀表板都是「多」才做多）  
-- [ ] ADX 達標、時段顯示「可做」  
+- [ ] ADX 達標、時段顯示「倫敦盤 / 美盤 / 倫美重疊」且可做  
 - [ ] 共振分數 ≥ 門檻  
 - [ ] 按標籤設停損/目標，單筆風險 ≤ 1%  
 - [ ] 非農 / FOMC / CPI 前後空手  

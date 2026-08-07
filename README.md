@@ -1,27 +1,11 @@
-# 黃金進場指標
+# Alpha Wave Institutional
 
-從頭重做，**只保留一個 TradingView 檔案**。
+本倉庫目前主體為 **Alpha Wave Institutional**（疊加在 **Alpha Wave Pro** 之上，不推翻 Pro）。
 
-## 檔案
+詳見：[`alphawave/README.md`](alphawave/README.md)
 
-`indicators/gold_entry.pine`
-
-## 怎麼用
-
-1. 打開 TradingView → Pine Editor  
-2. 貼上 `gold_entry.pine` 全部內容 → 加到圖表  
-3. 商品選 **XAUUSD / GOLD**，建議週期 **H1 或 H4**
-
-## 邏輯（很單純）
-
-- EMA 20 / 50 / 100 定方向  
-- ADX ≥ 18 才做（過濾盤整）  
-- 回檔碰到快線 + RSI 甜蜜區 + 陽/陰線確認  
-- 時段（台北）：倫敦 15:00–23:30、美盤 21:30–04:00（亞盤預設關）  
-- 停損 2 ATR，目標 3 / 5 ATR  
-
-面板位置可在設定裡改（左上～右下）。
-
-## 注意
-
-沒有指標能保證賺錢。單筆風險建議 ≤ 1%，重大數據前後空手。
+```
+alphawave/Pro/             # Pro 核心（setup 引擎）
+alphawave/Institutional/   # 制度層（Regime / Score / DD / Stats）
+alphawave/Experts/         # MT5 EA
+```

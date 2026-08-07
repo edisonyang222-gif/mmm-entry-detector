@@ -45,7 +45,7 @@ sessToday = timestamp(year, month, dayofmonth, sessionHour, sessionMinute)
 sessKey   = time >= sessToday ? sessToday : sessToday - 86400000
 newSess   = nz(ta.change(sessKey), 0) != 0
 if showSessionV and newSess
-    line.new(bar_index, low, bar_index, high, xloc=xloc.bar_index, extend=extend.both, color=color.yellow, style=line.style_dashed, width=1)
+    line.new(time, low, time, high, xloc=xloc.bar_time, extend=extend.both, color=color.yellow, style=line.style_dashed, width=1)
 
 biasCN(int b) =>
     b == 1 ? "偏多 ▲" : b == -1 ? "偏空 ▼" : "盤整 ─"
@@ -164,6 +164,9 @@ f_killOldest() =>
 
 f_addOrMergePool(float lvl, bool isHigh, float vol, int pivBar) =>
     float tol = math.max(nz(atr, 0) * liqEqualAtr, syminfo.mintick)
+    // 用 K 線時間錨點（bar_time），拖移圖表時標示跟著蠟燭走
+    int pivOff = bar_index - pivBar
+    int pivTime = pivOff >= 0 ? time[pivOff] : time
     bool merged = false
     int n = array.size(liqPrice)
     if n > 0
@@ -176,6 +179,7 @@ f_addOrMergePool(float lvl, bool isHigh, float vol, int pivBar) =>
                 if not na(lb)
                     label.set_text(lb, f_fmtPool(isHigh, nv))
                     label.set_y(lb, array.get(liqPrice, i))
+                    // x 保持原樞軸時間，不改動
                 merged := true
                 break
     if not merged and showLiqPool
@@ -185,7 +189,7 @@ f_addOrMergePool(float lvl, bool isHigh, float vol, int pivBar) =>
             f_killOldest()
         label style_ = isHigh ? label.style_label_down : label.style_label_up
         color bg = isHigh ? color.new(color.fuchsia, 20) : color.new(color.aqua, 20)
-        label lbNew = label.new(pivBar, lvl, f_fmtPool(isHigh, vol), xloc=xloc.bar_index, style=style_, color=bg, textcolor=color.white, size=size.small)
+        label lbNew = label.new(pivTime, lvl, f_fmtPool(isHigh, vol), xloc=xloc.bar_time, style=style_, color=bg, textcolor=color.white, size=size.small)
         array.push(liqPrice, lvl)
         array.push(liqIsHigh, isHigh)
         array.push(liqVol, vol)
@@ -335,22 +339,23 @@ plotshape(showSell and sellSignal, title="賣出", style=shape.triangledown, loc
 plotshape(showSweep and sweepLowNow, title="掃除下方", style=shape.diamond, location=location.belowbar, color=color.aqua, size=size.tiny)
 plotshape(showSweep and sweepHighNow, title="掃除上方", style=shape.diamond, location=location.abovebar, color=color.fuchsia, size=size.tiny)
 
-// S / R 水平價格線
+// S / R 水平價格線（錨點用 bar_time，跟著 K 線移動）
 var line lnSup = na
 var line lnRes = na
 var label lbSup = na
 var label lbRes = na
-var int sessStartBar = na
+var int sessStartTime = na
+
 if newSess
     if not na(lnSup)
-        line.set_x2(lnSup, bar_index - 1)
+        line.set_x2(lnSup, time[1])
     if not na(lnRes)
-        line.set_x2(lnRes, bar_index - 1)
+        line.set_x2(lnRes, time[1])
     if not na(lbSup)
         label.delete(lbSup)
     if not na(lbRes)
         label.delete(lbRes)
-    sessStartBar := bar_index
+    sessStartTime := time
     lnSup := na
     lnRes := na
     lbSup := na
@@ -358,35 +363,37 @@ if newSess
 
 if showSR and not na(validSupport)
     if na(lnSup)
-        int x0 = nz(sessStartBar, bar_index)
-        lnSup := line.new(x0, validSupport, bar_index, validSupport, xloc=xloc.bar_index, extend=extend.none, color=color.teal, style=line.style_solid, width=2)
-        lbSup := label.new(bar_index, validSupport, "S", style=label.style_label_left, color=color.new(color.teal, 30), textcolor=color.white, size=size.normal)
+        int t0 = nz(sessStartTime, time)
+        lnSup := line.new(t0, validSupport, time, validSupport, xloc=xloc.bar_time, extend=extend.none, color=color.teal, style=line.style_solid, width=2)
+        lbSup := label.new(t0, validSupport, "S", xloc=xloc.bar_time, style=label.style_label_right, color=color.new(color.teal, 30), textcolor=color.white, size=size.normal)
     else
-        line.set_x2(lnSup, bar_index)
+        line.set_x2(lnSup, time)
         line.set_y1(lnSup, validSupport)
         line.set_y2(lnSup, validSupport)
         if not na(lbSup)
-            label.set_xy(lbSup, bar_index, validSupport)
+            // 標籤固定在當日線起點，只更新價格
+            label.set_y(lbSup, validSupport)
             label.set_text(lbSup, "S")
 
 if showSR and not na(validResist)
     if na(lnRes)
-        int x1 = nz(sessStartBar, bar_index)
-        lnRes := line.new(x1, validResist, bar_index, validResist, xloc=xloc.bar_index, extend=extend.none, color=color.red, style=line.style_solid, width=2)
-        lbRes := label.new(bar_index, validResist, "R", style=label.style_label_left, color=color.new(color.red, 30), textcolor=color.white, size=size.normal)
+        int t1 = nz(sessStartTime, time)
+        lnRes := line.new(t1, validResist, time, validResist, xloc=xloc.bar_time, extend=extend.none, color=color.red, style=line.style_solid, width=2)
+        lbRes := label.new(t1, validResist, "R", xloc=xloc.bar_time, style=label.style_label_right, color=color.new(color.red, 30), textcolor=color.white, size=size.normal)
     else
-        line.set_x2(lnRes, bar_index)
+        line.set_x2(lnRes, time)
         line.set_y1(lnRes, validResist)
         line.set_y2(lnRes, validResist)
         if not na(lbRes)
-            label.set_xy(lbRes, bar_index, validResist)
+            label.set_y(lbRes, validResist)
             label.set_text(lbRes, "R")
 
 if showPlan and (buySignal or sellSignal)
-    line.new(bar_index, sigEntry, bar_index + 8, sigEntry, color=buySignal ? color.teal : color.red, width=1)
-    line.new(bar_index, sigSL, bar_index + 8, sigSL, color=color.red, style=line.style_dotted)
-    line.new(bar_index, sigTP, bar_index + 8, sigTP, color=color.lime, style=line.style_dotted)
-    label.new(bar_index, buySignal ? low : high, buySignal ? "S 回踩有效支撐" : "R 回踩有效阻力", style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.small)
+    int tEnd = time + timeframe.in_seconds() * 1000 * 8
+    line.new(time, sigEntry, tEnd, sigEntry, xloc=xloc.bar_time, color=buySignal ? color.teal : color.red, width=1)
+    line.new(time, sigSL, tEnd, sigSL, xloc=xloc.bar_time, color=color.red, style=line.style_dotted)
+    line.new(time, sigTP, tEnd, sigTP, xloc=xloc.bar_time, color=color.lime, style=line.style_dotted)
+    label.new(time, buySignal ? low : high, buySignal ? "S 回踩有效支撐" : "R 回踩有效阻力", xloc=xloc.bar_time, style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.small)
 
 //══════════════════════════════════════════════════════════════
 // 中文面版

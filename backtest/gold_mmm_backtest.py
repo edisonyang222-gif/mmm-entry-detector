@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-Gold MMM Entry Detector — Python backtest
+黃金 MMM 進場偵測 — Python 回測（小週期共振版）
 
-Same Multi-filter Momentum Method used in the Pine scripts:
-  1) EMA trend bias (21/55 + 200)
-  2) Pullback to fast EMA
-  3) RSI sweet-spot
-  4) ATR regime filter
-  5) Session filter (optional; skipped on daily bars)
+濾網：
+  1) EMA 趨勢 + 回檔
+  2) RSI 甜蜜區
+  3) ATR 波動區間
+  4) 高週期共振（HTF1 / HTF2）
+  5) ADX 趨勢強度
+  6) MACD 柱狀動能
+  7) EMA 斜率
+  8) 共振分數門檻
 
-Usage:
-  pip install -r requirements.txt
-  python backtest/gold_mmm_backtest.py
-  python backtest/gold_mmm_backtest.py --csv path/to/xauusd_h1.csv
-  python backtest/gold_mmm_backtest.py --symbol GC=F --interval 1h --period 2y
-
-CSV columns expected: datetime, open, high, low, close [, volume]
+用法：
+  python3 backtest/gold_mmm_backtest.py --symbol GC=F --interval 1h --period 2y --htf1 4h --htf2 1D
+  python3 backtest/gold_mmm_backtest.py --synthetic
 """
 
 from __future__ import annotations
@@ -58,11 +57,56 @@ def atr(df: pd.DataFrame, length: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
 
 
+def macd_hist(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.Series:
+    line = ema(series, fast) - ema(series, slow)
+    sig = ema(line, signal)
+    return line - sig
+
+
+def adx(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    up = df["high"].diff()
+    down = -df["low"].diff()
+    plus_dm = np.where((up > down) & (up > 0), up, 0.0)
+    minus_dm = np.where((down > up) & (down > 0), down, 0.0)
+    atr_rma = (
+        pd.concat(
+            [
+                df["high"] - df["low"],
+                (df["high"] - df["close"].shift(1)).abs(),
+                (df["low"] - df["close"].shift(1)).abs(),
+            ],
+            axis=1,
+        )
+        .max(axis=1)
+        .ewm(alpha=1 / length, min_periods=length, adjust=False)
+        .mean()
+    )
+    plus_di = 100 * pd.Series(plus_dm, index=df.index).ewm(
+        alpha=1 / length, min_periods=length, adjust=False
+    ).mean() / atr_rma.replace(0, np.nan)
+    minus_di = 100 * pd.Series(minus_dm, index=df.index).ewm(
+        alpha=1 / length, min_periods=length, adjust=False
+    ).mean() / atr_rma.replace(0, np.nan)
+    dx = (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, np.nan) * 100
+    return dx.ewm(alpha=1 / length, min_periods=length, adjust=False).mean()
+
+
+def htf_bias(df: pd.DataFrame, rule: str, ema_len: int) -> pd.Series:
+    """Higher-timeframe close vs EMA, forward-filled to base TF without lookahead."""
+    htf = df.resample(rule).agg({"close": "last"}).dropna()
+    htf_ema = ema(htf["close"], ema_len)
+    bias = (htf["close"] > htf_ema).astype(float)
+    # shift 1 so current incomplete HTF bar is not used
+    bias = bias.shift(1)
+    aligned = bias.reindex(df.index, method="ffill")
+    return aligned.fillna(0.0)
+
+
 # ── config ──────────────────────────────────────────────────
 
 @dataclass
 class Params:
-    # Defaults tuned for XAU / GC on H4 (also works on D1)
+    # 小週期共振預設（H1）；H4/D1 可關 mtf / 放寬分數
     ema_fast: int = 20
     ema_slow: int = 50
     ema_bias: int = 100
@@ -78,11 +122,25 @@ class Params:
     sl_atr: float = 2.0
     tp1_atr: float = 3.0
     tp2_atr: float = 5.0
-    cooldown: int = 6
-    risk_pct: float = 0.01  # risk 1% equity per trade
+    cooldown: int = 8
+    risk_pct: float = 0.01
     start_equity: float = 10_000.0
     long_only: bool = False
     short_only: bool = False
+    # 共振
+    use_mtf: bool = True
+    htf1_rule: str = "1h"   # 對 M15 用 1h；對 H1 用 4h
+    use_htf2: bool = True
+    htf2_rule: str = "4h"
+    htf_ema: int = 50
+    use_adx: bool = True
+    adx_len: int = 14
+    adx_min: float = 18.0
+    use_macd: bool = True
+    use_slope: bool = True
+    slope_bars: int = 3
+    min_score: int = 5
+    # 若 base TF 已是 H1，htf1 應設 4h、htf2 設 1D（由 CLI 覆寫）
 
 
 # ── signal engine ───────────────────────────────────────────
@@ -95,6 +153,8 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     out["rsi"] = rsi(out["close"], p.rsi_len)
     out["atr"] = atr(out, p.atr_len)
     out["atr_ma"] = out["atr"].rolling(p.atr_ma_len).mean()
+    out["macd_hist"] = macd_hist(out["close"])
+    out["adx"] = adx(out, p.adx_len)
 
     bull = (out["ema_fast"] > out["ema_slow"]) & (out["close"] > out["ema_bias"])
     bear = (out["ema_fast"] < out["ema_slow"]) & (out["close"] < out["ema_bias"])
@@ -103,26 +163,99 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
         & (out["atr"] / out["atr_ma"] >= p.min_atr_mult)
         & (out["atr"] / out["atr_ma"] <= p.max_atr_mult)
     )
-
     pull_long = (out["low"] <= out["ema_fast"] * 1.001) & (out["close"] > out["ema_fast"])
     pull_short = (out["high"] >= out["ema_fast"] * 0.999) & (out["close"] < out["ema_fast"])
     rsi_long = (out["rsi"] >= p.rsi_buy_low) & (out["rsi"] <= p.rsi_buy_high)
     rsi_short = (out["rsi"] <= p.rsi_sell_high) & (out["rsi"] >= p.rsi_sell_low)
     bull_c = (out["close"] > out["open"]) & (out["close"] > out["close"].shift(1))
     bear_c = (out["close"] < out["open"]) & (out["close"] < out["close"].shift(1))
+    slope_up = out["ema_fast"] > out["ema_fast"].shift(p.slope_bars)
+    slope_dn = out["ema_fast"] < out["ema_fast"].shift(p.slope_bars)
+    adx_ok = (~p.use_adx) | (out["adx"] >= p.adx_min)
+    macd_long = (~p.use_macd) | (
+        (out["macd_hist"] > 0) & (out["macd_hist"] > out["macd_hist"].shift(1))
+    )
+    macd_short = (~p.use_macd) | (
+        (out["macd_hist"] < 0) & (out["macd_hist"] < out["macd_hist"].shift(1))
+    )
 
-    raw_long = bull & pull_long & rsi_long & vol_ok & bull_c
-    raw_short = bear & pull_short & rsi_short & vol_ok & bear_c
+    if p.use_mtf:
+        h1 = htf_bias(out, p.htf1_rule, p.htf_ema)
+        htf1_bull = h1 > 0.5
+        htf1_bear = h1 < 0.5
+        if p.use_htf2:
+            h2 = htf_bias(out, p.htf2_rule, p.htf_ema)
+            htf2_bull = h2 > 0.5
+            htf2_bear = h2 < 0.5
+        else:
+            htf2_bull = pd.Series(True, index=out.index)
+            htf2_bear = pd.Series(True, index=out.index)
+    else:
+        htf1_bull = htf2_bull = pd.Series(True, index=out.index)
+        htf1_bear = htf2_bear = pd.Series(True, index=out.index)
+
+    mtf_long = htf1_bull & htf2_bull
+    mtf_short = htf1_bear & htf2_bear
+
+    # 打分（與 Pine 對齊，關閉項給滿分）
+    score_long = (
+        bull.astype(int)
+        + pull_long.astype(int)
+        + rsi_long.astype(int)
+        + vol_ok.astype(int)
+        + (htf1_bull if p.use_mtf else pd.Series(True, index=out.index)).astype(int)
+        + (
+            htf2_bull
+            if (p.use_mtf and p.use_htf2)
+            else pd.Series(True, index=out.index)
+        ).astype(int)
+        + (adx_ok if p.use_adx else pd.Series(True, index=out.index)).astype(int)
+        + (macd_long if p.use_macd else pd.Series(True, index=out.index)).astype(int)
+    )
+    score_short = (
+        bear.astype(int)
+        + pull_short.astype(int)
+        + rsi_short.astype(int)
+        + vol_ok.astype(int)
+        + (htf1_bear if p.use_mtf else pd.Series(True, index=out.index)).astype(int)
+        + (
+            htf2_bear
+            if (p.use_mtf and p.use_htf2)
+            else pd.Series(True, index=out.index)
+        ).astype(int)
+        + (adx_ok if p.use_adx else pd.Series(True, index=out.index)).astype(int)
+        + (macd_short if p.use_macd else pd.Series(True, index=out.index)).astype(int)
+    )
+
+    slope_long_ok = (~p.use_slope) | slope_up
+    slope_short_ok = (~p.use_slope) | slope_dn
+
+    raw_long = (
+        bull
+        & pull_long
+        & bull_c
+        & slope_long_ok
+        & mtf_long
+        & (score_long >= p.min_score)
+    )
+    raw_short = (
+        bear
+        & pull_short
+        & bear_c
+        & slope_short_ok
+        & mtf_short
+        & (score_short >= p.min_score)
+    )
 
     long_fire = np.zeros(len(out), dtype=bool)
     short_fire = np.zeros(len(out), dtype=bool)
     last_long = -10_000
     last_short = -10_000
     for i in range(len(out)):
-        if (not p.short_only) and raw_long.iloc[i] and i - last_long >= p.cooldown:
+        if (not p.short_only) and bool(raw_long.iloc[i]) and i - last_long >= p.cooldown:
             long_fire[i] = True
             last_long = i
-        if (not p.long_only) and raw_short.iloc[i] and i - last_short >= p.cooldown:
+        if (not p.long_only) and bool(raw_short.iloc[i]) and i - last_short >= p.cooldown:
             short_fire[i] = True
             last_short = i
 
@@ -130,6 +263,8 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     out["short"] = short_fire
     out["bull_trend"] = bull
     out["bear_trend"] = bear
+    out["score_long"] = score_long
+    out["score_short"] = score_short
     return out
 
 
@@ -379,34 +514,63 @@ def synthetic_gold(bars: int = 5000, seed: int = 42) -> pd.DataFrame:
 
 
 def print_report(trades: list[Trade], stats: dict) -> None:
-    print("\n═══ Gold MMM Backtest Report ═══")
+    print("\n═══ 黃金MMM 回測報告 ═══")
+    labels = {
+        "trades": "交易數",
+        "wins": "獲利筆數",
+        "losses": "虧損筆數",
+        "win_rate": "勝率%",
+        "profit_factor": "盈虧比PF",
+        "net_pnl": "淨損益",
+        "final_equity": "最終權益",
+        "return_pct": "報酬%",
+        "max_drawdown_pct": "最大回撤%",
+        "avg_pnl": "平均損益",
+    }
     for k, v in stats.items():
+        name = labels.get(k, k)
         if isinstance(v, float):
-            print(f"  {k:20s} {v:>12.2f}")
+            print(f"  {name:12s} {v:>12.2f}")
         else:
-            print(f"  {k:20s} {v:>12}")
-    print("\nLast 10 trades:")
+            print(f"  {name:12s} {v:>12}")
+    print("\n最近 10 筆：")
     for t in trades[-10:]:
         exit_px = f"{t.exit:.2f}" if t.exit is not None else "-"
+        side = "做多" if t.side == "long" else "做空"
         print(
-            f"  {t.side:5s} {t.entry_time} @ {t.entry:.2f} → "
-            f"{exit_px} | PnL {t.pnl:+.2f} | {t.reason}"
+            f"  {side} {t.entry_time} @ {t.entry:.2f} → "
+            f"{exit_px} | 損益 {t.pnl:+.2f} | {t.reason}"
         )
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Gold MMM backtest")
-    ap.add_argument("--csv", type=Path, help="OHLCV CSV path")
-    ap.add_argument("--symbol", default="GC=F", help="Yahoo symbol (default GC=F gold futures)")
-    ap.add_argument("--interval", default="1h", help="Yahoo interval")
-    ap.add_argument("--period", default="2y", help="Yahoo period")
-    ap.add_argument("--synthetic", action="store_true", help="Use synthetic data (offline smoke test)")
-    ap.add_argument("--long-only", action="store_true", help="Disable short entries")
-    ap.add_argument("--short-only", action="store_true", help="Disable long entries")
-    ap.add_argument("--resample", default="", help="Optional pandas resample rule, e.g. 4h")
+    ap = argparse.ArgumentParser(description="黃金 MMM 回測")
+    ap.add_argument("--csv", type=Path, help="OHLCV CSV 路徑")
+    ap.add_argument("--symbol", default="GC=F", help="Yahoo 代碼（預設 GC=F）")
+    ap.add_argument("--interval", default="1h", help="Yahoo 週期")
+    ap.add_argument("--period", default="2y", help="Yahoo 區間")
+    ap.add_argument("--synthetic", action="store_true", help="合成資料煙霧測試")
+    ap.add_argument("--long-only", action="store_true", help="只做多")
+    ap.add_argument("--short-only", action="store_true", help="只做空")
+    ap.add_argument("--resample", default="", help="重採樣，例如 4h")
+    ap.add_argument("--htf1", default="4h", help="第一共振週期（H1 圖建議 4h）")
+    ap.add_argument("--htf2", default="1D", help="第二共振週期（H1 圖建議 1D）")
+    ap.add_argument("--min-score", type=int, default=5, help="最低共振分數")
+    ap.add_argument("--no-mtf", action="store_true", help="關閉高週期共振")
+    ap.add_argument("--no-adx", action="store_true", help="關閉 ADX")
+    ap.add_argument("--no-macd", action="store_true", help="關閉 MACD")
     args = ap.parse_args()
 
-    params = Params(long_only=args.long_only, short_only=args.short_only)
+    params = Params(
+        long_only=args.long_only,
+        short_only=args.short_only,
+        htf1_rule=args.htf1,
+        htf2_rule=args.htf2,
+        min_score=args.min_score,
+        use_mtf=not args.no_mtf,
+        use_adx=not args.no_adx,
+        use_macd=not args.no_macd,
+    )
 
     if args.csv:
         df = load_csv(args.csv)
@@ -419,7 +583,7 @@ def main() -> int:
             df = load_yahoo(args.symbol, args.interval, args.period)
             source = f"{args.symbol} {args.interval} {args.period}"
         except SystemExit:
-            print("Yahoo download failed; falling back to synthetic data.", file=sys.stderr)
+            print("Yahoo 下載失敗，改用合成資料。", file=sys.stderr)
             df = synthetic_gold()
             source = "synthetic (fallback)"
 
@@ -431,7 +595,12 @@ def main() -> int:
         )
         source = f"{source} → {args.resample}"
 
-    print(f"Data: {source} | bars={len(df)} | {df.index[0]} → {df.index[-1]}")
+    print(f"資料: {source} | K線={len(df)} | {df.index[0]} → {df.index[-1]}")
+    print(
+        f"共振: MTF={'開' if params.use_mtf else '關'}({params.htf1_rule}/{params.htf2_rule}) "
+        f"ADX={'開' if params.use_adx else '關'} MACD={'開' if params.use_macd else '關'} "
+        f"分數≥{params.min_score}"
+    )
     trades, stats = run_backtest(df, params)
     print_report(trades, stats)
 
@@ -455,7 +624,7 @@ def main() -> int:
                 for t in trades
             ]
         ).to_csv(out_dir / "trades.csv", index=False)
-        print(f"\nTrades saved → {out_dir / 'trades.csv'}")
+        print(f"\n成交明細 → {out_dir / 'trades.csv'}")
     return 0
 
 

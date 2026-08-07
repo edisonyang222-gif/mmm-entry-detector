@@ -1,106 +1,171 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // https://mozilla.org/MPL/2.0/
 //
-// Gold MMM Strategy — same logic as the indicator, for Strategy Tester
-// Recommended: XAUUSD / GOLD on H4 or D1
+// 黃金 MMM 策略（小週期共振版）— 與指標同邏輯，供 Strategy Tester
 
 //@version=5
-strategy("Gold MMM Strategy", shorttitle="Gold MMM Strat", overlay=true,
+strategy("黃金MMM策略", shorttitle="黃金MMM策略", overlay=true,
      initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=5,
      commission_type=strategy.commission.percent, commission_value=0.02,
      slippage=2, pyramiding=0, calc_on_every_tick=false)
 
-grpTrend = "Trend Filter"
-emaFastLen   = input.int(20,  "Fast EMA", minval=5, group=grpTrend)
-emaSlowLen   = input.int(50,  "Slow EMA", minval=10, group=grpTrend)
-emaBiasLen   = input.int(100, "Bias EMA", minval=50, group=grpTrend)
-tradeMode    = input.string("Both", "Direction", options=["Both", "Long only", "Short only"], group=grpTrend)
+grpTrend = "① 本週期趨勢"
+emaFastLen   = input.int(20,  "快線 EMA", minval=5, group=grpTrend)
+emaSlowLen   = input.int(50,  "慢線 EMA", minval=10, group=grpTrend)
+emaBiasLen   = input.int(100, "方向 EMA", minval=50, group=grpTrend)
+tradeMode    = input.string("多空皆可", "交易方向", options=["多空皆可", "只做多", "只做空"], group=grpTrend)
 
-grpMom = "Momentum / Pullback"
-rsiLen       = input.int(14, "RSI Length", minval=2, group=grpMom)
-rsiBuyLow    = input.int(35, "Long RSI Zone Low",  minval=10, maxval=50, group=grpMom)
-rsiBuyHigh   = input.int(55, "Long RSI Zone High", minval=40, maxval=70, group=grpMom)
-rsiSellHigh  = input.int(65, "Short RSI Zone High", minval=50, maxval=90, group=grpMom)
-rsiSellLow   = input.int(45, "Short RSI Zone Low",  minval=30, maxval=60, group=grpMom)
+grpMom = "② 動能 / 回檔"
+rsiLen       = input.int(14, "RSI 週期", minval=2, group=grpMom)
+rsiBuyLow    = input.int(35, "做多 RSI 下限", minval=10, maxval=50, group=grpMom)
+rsiBuyHigh   = input.int(55, "做多 RSI 上限", minval=40, maxval=70, group=grpMom)
+rsiSellHigh  = input.int(65, "做空 RSI 上限", minval=50, maxval=90, group=grpMom)
+rsiSellLow   = input.int(45, "做空 RSI 下限", minval=30, maxval=60, group=grpMom)
 
-grpVol = "Volatility"
-atrLen       = input.int(14, "ATR Length", minval=1, group=grpVol)
-atrMaLen     = input.int(50, "ATR MA Length", minval=5, group=grpVol)
-minAtrMult   = input.float(0.6, "Min ATR / ATR-MA", minval=0.1, step=0.05, group=grpVol)
-maxAtrMult   = input.float(3.0, "Max ATR / ATR-MA", minval=1.0, step=0.05, group=grpVol)
+grpMtf = "③ 高週期共振"
+useMtf       = input.bool(true, "啟用高週期共振", group=grpMtf)
+htf1         = input.timeframe("240", "第一共振週期", group=grpMtf)
+useHtf2      = input.bool(true, "啟用第二共振週期", group=grpMtf)
+htf2         = input.timeframe("D", "第二共振週期", group=grpMtf)
+htfEmaLen    = input.int(50, "高週期 EMA", minval=10, group=grpMtf)
 
-grpRisk = "Risk / Targets"
-slAtrMult    = input.float(2.0, "Stop Loss (ATR ×)", minval=0.5, step=0.1, group=grpRisk)
-tp1AtrMult   = input.float(3.0, "TP1 (ATR ×) — scale out 50%", minval=0.5, step=0.1, group=grpRisk)
-tp2AtrMult   = input.float(5.0, "TP2 (ATR ×) — runners", minval=1.0, step=0.1, group=grpRisk)
-cooldownBars = input.int(6, "Signal cooldown (bars)", minval=1, group=grpRisk)
+grpAdx = "④ 趨勢強度 ADX"
+useAdx       = input.bool(true, "啟用 ADX 過濾", group=grpAdx)
+adxLen       = input.int(14, "ADX 週期", minval=5, group=grpAdx)
+adxMin       = input.float(18.0, "最低 ADX", minval=5, step=0.5, group=grpAdx)
 
-grpSession = "Session Filter"
-useSession   = input.bool(false, "Only trade London / NY sessions", group=grpSession)
-londonSess   = input.session("0700-1600", "London", group=grpSession)
-nySess       = input.session("1300-2100", "New York", group=grpSession)
+grpMacd = "⑤ MACD 動能共振"
+useMacd      = input.bool(true, "啟用 MACD 共振", group=grpMacd)
+macdFast     = input.int(12, "MACD 快線", minval=2, group=grpMacd)
+macdSlow     = input.int(26, "MACD 慢線", minval=5, group=grpMacd)
+macdSig      = input.int(9, "MACD 訊號線", minval=2, group=grpMacd)
+
+grpSlope = "⑥ EMA 斜率"
+useSlope     = input.bool(true, "啟用斜率過濾", group=grpSlope)
+slopeBars    = input.int(3, "斜率回看根數", minval=1, group=grpSlope)
+
+grpVol = "⑦ 波動率 ATR"
+atrLen       = input.int(14, "ATR 週期", minval=1, group=grpVol)
+atrMaLen     = input.int(50, "ATR 均線", minval=5, group=grpVol)
+minAtrMult   = input.float(0.6, "ATR 下限倍數", minval=0.1, step=0.05, group=grpVol)
+maxAtrMult   = input.float(3.0, "ATR 上限倍數", minval=1.0, step=0.05, group=grpVol)
+
+grpScore = "⑧ 共振分數門檻"
+minScore     = input.int(5, "最低共振分數", minval=2, maxval=8, group=grpScore)
+cooldownBars = input.int(8, "訊號冷卻根數", minval=1, group=grpScore)
+
+grpRisk = "⑨ 風控目標"
+slAtrMult    = input.float(2.0, "停損 ATR 倍數", minval=0.5, step=0.1, group=grpRisk)
+tp1AtrMult   = input.float(3.0, "TP1 ATR 倍數", minval=0.5, step=0.1, group=grpRisk)
+tp2AtrMult   = input.float(5.0, "TP2 ATR 倍數", minval=1.0, step=0.1, group=grpRisk)
+
+grpSession = "⑩ 時段過濾"
+useSession   = input.bool(true, "只做倫敦 / 紐約時段", group=grpSession)
+useOverlap   = input.bool(false, "只做倫敦紐約重疊", group=grpSession)
+londonSess   = input.session("0700-1600", "倫敦時段", group=grpSession)
+nySess       = input.session("1300-2100", "紐約時段", group=grpSession)
 
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
 emaBias = ta.ema(close, emaBiasLen)
-rsi     = ta.rsi(close, rsiLen)
-atr     = ta.atr(atrLen)
-atrMa   = ta.sma(atr, atrMaLen)
+rsiVal  = ta.rsi(close, rsiLen)
+atrVal  = ta.atr(atrLen)
+atrMa   = ta.sma(atrVal, atrMaLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
 
 bullTrend = emaFast > emaSlow and close > emaBias
 bearTrend = emaFast < emaSlow and close < emaBias
-volOk = atrMa > 0 and atr / atrMa >= minAtrMult and atr / atrMa <= maxAtrMult
+emaSlopeUp   = emaFast > emaFast[slopeBars]
+emaSlopeDown = emaFast < emaFast[slopeBars]
+slopeLongOk  = not useSlope or emaSlopeUp
+slopeShortOk = not useSlope or emaSlopeDown
+volOk = atrMa > 0 and atrVal / atrMa >= minAtrMult and atrVal / atrMa <= maxAtrMult
+
 inLondon = not na(time(timeframe.period, londonSess))
 inNY     = not na(time(timeframe.period, nySess))
-sessionOk = not useSession or inLondon or inNY
+sessionOk = not useSession or (useOverlap ? (inLondon and inNY) : (inLondon or inNY))
 
 pullbackLong  = low <= emaFast * 1.001 and close > emaFast
 pullbackShort = high >= emaFast * 0.999 and close < emaFast
-rsiLongOk  = rsi >= rsiBuyLow and rsi <= rsiBuyHigh
-rsiShortOk = rsi <= rsiSellHigh and rsi >= rsiSellLow
+rsiLongOk  = rsiVal >= rsiBuyLow and rsiVal <= rsiBuyHigh
+rsiShortOk = rsiVal <= rsiSellHigh and rsiVal >= rsiSellLow
 bullCandle = close > open and close > close[1]
 bearCandle = close < open and close < close[1]
+adxOk = not useAdx or adxVal >= adxMin
+macdLongOk  = not useMacd or (macdHist > 0 and macdHist > macdHist[1])
+macdShortOk = not useMacd or (macdHist < 0 and macdHist < macdHist[1])
 
-allowLong  = tradeMode != "Short only"
-allowShort = tradeMode != "Long only"
+htf1Close = request.security(syminfo.tickerid, htf1, close, lookahead=barmerge.lookahead_off)
+htf1Ema   = request.security(syminfo.tickerid, htf1, ta.ema(close, htfEmaLen), lookahead=barmerge.lookahead_off)
+htf1Bull  = htf1Close > htf1Ema
+htf1Bear  = htf1Close < htf1Ema
+htf2Close = request.security(syminfo.tickerid, htf2, close, lookahead=barmerge.lookahead_off)
+htf2Ema   = request.security(syminfo.tickerid, htf2, ta.ema(close, htfEmaLen), lookahead=barmerge.lookahead_off)
+htf2Bull  = htf2Close > htf2Ema
+htf2Bear  = htf2Close < htf2Ema
+mtfLongOk  = (not useMtf or htf1Bull) and (not useMtf or not useHtf2 or htf2Bull)
+mtfShortOk = (not useMtf or htf1Bear) and (not useMtf or not useHtf2 or htf2Bear)
 
-longSignal  = allowLong  and bullTrend and pullbackLong and rsiLongOk and volOk and sessionOk and bullCandle
-shortSignal = allowShort and bearTrend and pullbackShort and rsiShortOk and volOk and sessionOk and bearCandle
+scoreLong = 0
+scoreLong += bullTrend ? 1 : 0
+scoreLong += pullbackLong ? 1 : 0
+scoreLong += rsiLongOk ? 1 : 0
+scoreLong += volOk ? 1 : 0
+scoreLong += (useMtf and htf1Bull) ? 1 : (useMtf ? 0 : 1)
+scoreLong += (useMtf and useHtf2 and htf2Bull) ? 1 : ((useMtf and useHtf2) ? 0 : 1)
+scoreLong += (useAdx and adxOk) ? 1 : (useAdx ? 0 : 1)
+scoreLong += (useMacd and macdLongOk) ? 1 : (useMacd ? 0 : 1)
+
+scoreShort = 0
+scoreShort += bearTrend ? 1 : 0
+scoreShort += pullbackShort ? 1 : 0
+scoreShort += rsiShortOk ? 1 : 0
+scoreShort += volOk ? 1 : 0
+scoreShort += (useMtf and htf1Bear) ? 1 : (useMtf ? 0 : 1)
+scoreShort += (useMtf and useHtf2 and htf2Bear) ? 1 : ((useMtf and useHtf2) ? 0 : 1)
+scoreShort += (useAdx and adxOk) ? 1 : (useAdx ? 0 : 1)
+scoreShort += (useMacd and macdShortOk) ? 1 : (useMacd ? 0 : 1)
+
+allowLong  = tradeMode != "只做空"
+allowShort = tradeMode != "只做多"
+
+longSignal  = allowLong and sessionOk and slopeLongOk and bullCandle and scoreLong >= minScore and mtfLongOk and pullbackLong and bullTrend
+shortSignal = allowShort and sessionOk and slopeShortOk and bearCandle and scoreShort >= minScore and mtfShortOk and pullbackShort and bearTrend
 
 var int lastLongBar  = na
 var int lastShortBar = na
 longFire  = longSignal  and (na(lastLongBar)  or bar_index - lastLongBar  >= cooldownBars)
 shortFire = shortSignal and (na(lastShortBar) or bar_index - lastShortBar >= cooldownBars)
-
 if longFire
     lastLongBar := bar_index
 if shortFire
     lastShortBar := bar_index
 
-plot(emaFast, "EMA Fast", color=color.new(#2E7D32, 0), linewidth=2)
-plot(emaSlow, "EMA Slow", color=color.new(#C62828, 0), linewidth=2)
-plot(emaBias, "EMA Bias", color=color.new(#546E7A, 30), linewidth=2)
-plotshape(longFire,  style=shape.triangleup,   location=location.belowbar, color=color.new(#00C853, 0), size=size.small)
-plotshape(shortFire, style=shape.triangledown, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small)
+plot(emaFast, "快線EMA", color=color.new(#2E7D32, 0), linewidth=2)
+plot(emaSlow, "慢線EMA", color=color.new(#C62828, 0), linewidth=2)
+plot(emaBias, "方向EMA", color=color.new(#546E7A, 30), linewidth=2)
+plotshape(longFire,  style=shape.triangleup,   location=location.belowbar, color=color.new(#00C853, 0), size=size.small, text="做多")
+plotshape(shortFire, style=shape.triangledown, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small, text="做空")
 
-longSL  = close - atr * slAtrMult
-longTP1 = close + atr * tp1AtrMult
-longTP2 = close + atr * tp2AtrMult
-shortSL  = close + atr * slAtrMult
-shortTP1 = close - atr * tp1AtrMult
-shortTP2 = close - atr * tp2AtrMult
+longSL  = close - atrVal * slAtrMult
+longTP1 = close + atrVal * tp1AtrMult
+longTP2 = close + atrVal * tp2AtrMult
+shortSL  = close + atrVal * slAtrMult
+shortTP1 = close - atrVal * tp1AtrMult
+shortTP2 = close - atrVal * tp2AtrMult
 
 if longFire
-    strategy.entry("Long", strategy.long)
-    strategy.exit("L-TP1", from_entry="Long", qty_percent=50, stop=longSL, limit=longTP1)
-    strategy.exit("L-TP2", from_entry="Long", stop=longSL, limit=longTP2)
+    strategy.entry("做多", strategy.long)
+    strategy.exit("多-TP1", from_entry="做多", qty_percent=50, stop=longSL, limit=longTP1)
+    strategy.exit("多-TP2", from_entry="做多", stop=longSL, limit=longTP2)
 
 if shortFire
-    strategy.entry("Short", strategy.short)
-    strategy.exit("S-TP1", from_entry="Short", qty_percent=50, stop=shortSL, limit=shortTP1)
-    strategy.exit("S-TP2", from_entry="Short", stop=shortSL, limit=shortTP2)
+    strategy.entry("做空", strategy.short)
+    strategy.exit("空-TP1", from_entry="做空", qty_percent=50, stop=shortSL, limit=shortTP1)
+    strategy.exit("空-TP2", from_entry="做空", stop=shortSL, limit=shortTP2)
 
 if strategy.position_size > 0 and bearTrend
-    strategy.close("Long", comment="trend flip")
+    strategy.close("做多", comment="趨勢翻轉")
 if strategy.position_size < 0 and bullTrend
-    strategy.close("Short", comment="trend flip")
+    strategy.close("做空", comment="趨勢翻轉")

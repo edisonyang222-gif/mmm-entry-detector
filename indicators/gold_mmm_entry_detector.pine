@@ -1,83 +1,159 @@
 // This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
 // https://mozilla.org/MPL/2.0/
 //
-// Gold MMM Entry Detector
-// Multi-filter Momentum Method for XAUUSD / GOLD
-// Tuned for H4 / D1 — trend pullback with volatility + session filters
+// 黃金 MMM 進場偵測器（小週期共振版）
+// 本週期趨勢回檔 + 高週期共振 + ADX + MACD + 斜率 + 時段
 
 //@version=5
-indicator("Gold MMM Entry Detector", shorttitle="Gold MMM", overlay=true, max_labels_count=500)
+indicator("黃金MMM進場偵測", shorttitle="黃金MMM", overlay=true, max_labels_count=500)
 
 // ═══════════════════════════════════════════════════════════
-// INPUTS
+// 參數
 // ═══════════════════════════════════════════════════════════
-grpTrend = "Trend Filter"
-emaFastLen   = input.int(20,  "Fast EMA", minval=5, group=grpTrend)
-emaSlowLen   = input.int(50,  "Slow EMA", minval=10, group=grpTrend)
-emaBiasLen   = input.int(100, "Bias EMA", minval=50, group=grpTrend)
-tradeMode    = input.string("Both", "Direction", options=["Both", "Long only", "Short only"], group=grpTrend)
+grpTrend = "① 本週期趨勢"
+emaFastLen   = input.int(20,  "快線 EMA", minval=5, group=grpTrend)
+emaSlowLen   = input.int(50,  "慢線 EMA", minval=10, group=grpTrend)
+emaBiasLen   = input.int(100, "方向 EMA", minval=50, group=grpTrend)
+tradeMode    = input.string("多空皆可", "交易方向", options=["多空皆可", "只做多", "只做空"], group=grpTrend)
 
-grpMom = "Momentum / Pullback"
-rsiLen       = input.int(14, "RSI Length", minval=2, group=grpMom)
-rsiBuyLow    = input.int(35, "Long RSI Zone Low",  minval=10, maxval=50, group=grpMom)
-rsiBuyHigh   = input.int(55, "Long RSI Zone High", minval=40, maxval=70, group=grpMom)
-rsiSellHigh  = input.int(65, "Short RSI Zone High", minval=50, maxval=90, group=grpMom)
-rsiSellLow   = input.int(45, "Short RSI Zone Low",  minval=30, maxval=60, group=grpMom)
+grpMom = "② 動能 / 回檔"
+rsiLen       = input.int(14, "RSI 週期", minval=2, group=grpMom)
+rsiBuyLow    = input.int(35, "做多 RSI 下限", minval=10, maxval=50, group=grpMom)
+rsiBuyHigh   = input.int(55, "做多 RSI 上限", minval=40, maxval=70, group=grpMom)
+rsiSellHigh  = input.int(65, "做空 RSI 上限", minval=50, maxval=90, group=grpMom)
+rsiSellLow   = input.int(45, "做空 RSI 下限", minval=30, maxval=60, group=grpMom)
 
-grpVol = "Volatility"
-atrLen       = input.int(14, "ATR Length", minval=1, group=grpVol)
-atrMaLen     = input.int(50, "ATR MA Length", minval=5, group=grpVol)
-minAtrMult   = input.float(0.6, "Min ATR / ATR-MA (avoid dead market)", minval=0.1, step=0.05, group=grpVol)
-maxAtrMult   = input.float(3.0, "Max ATR / ATR-MA (avoid news spikes)", minval=1.0, step=0.05, group=grpVol)
+grpMtf = "③ 高週期共振（小週期必開）"
+useMtf       = input.bool(true, "啟用高週期共振", group=grpMtf, tooltip="H1 圖：對齊 H4+D1；M15 圖：改成 60 + 240。大週期可關。")
+htf1         = input.timeframe("240", "第一共振週期", group=grpMtf)
+useHtf2      = input.bool(true, "啟用第二共振週期", group=grpMtf)
+htf2         = input.timeframe("D", "第二共振週期", group=grpMtf)
+htfEmaLen    = input.int(50, "高週期 EMA", minval=10, group=grpMtf)
 
-grpRisk = "Risk / Targets"
-slAtrMult    = input.float(2.0, "Stop Loss (ATR ×)", minval=0.5, step=0.1, group=grpRisk)
-tp1AtrMult   = input.float(3.0, "TP1 (ATR ×)", minval=0.5, step=0.1, group=grpRisk)
-tp2AtrMult   = input.float(5.0, "TP2 (ATR ×)", minval=1.0, step=0.1, group=grpRisk)
-cooldownBars = input.int(6, "Signal cooldown (bars)", minval=1, group=grpRisk)
+grpAdx = "④ 趨勢強度 ADX"
+useAdx       = input.bool(true, "啟用 ADX 過濾", group=grpAdx)
+adxLen       = input.int(14, "ADX 週期", minval=5, group=grpAdx)
+adxMin       = input.float(18.0, "最低 ADX（過濾盤整）", minval=5, step=0.5, group=grpAdx)
 
-grpSession = "Session Filter (exchange time)"
-useSession   = input.bool(false, "Only trade London / NY sessions", group=grpSession, tooltip="Recommended OFF on H4/D1. Turn ON for H1.")
-londonSess   = input.session("0700-1600", "London", group=grpSession)
-nySess       = input.session("1300-2100", "New York", group=grpSession)
+grpMacd = "⑤ MACD 動能共振"
+useMacd      = input.bool(true, "啟用 MACD 共振", group=grpMacd)
+macdFast     = input.int(12, "MACD 快線", minval=2, group=grpMacd)
+macdSlow     = input.int(26, "MACD 慢線", minval=5, group=grpMacd)
+macdSig      = input.int(9, "MACD 訊號線", minval=2, group=grpMacd)
 
-grpAlert = "Alerts / Display"
-showLevels   = input.bool(true, "Show SL / TP on signal bar", group=grpAlert)
-showBg       = input.bool(true, "Color background by bias", group=grpAlert)
+grpSlope = "⑥ EMA 斜率"
+useSlope     = input.bool(true, "啟用斜率過濾", group=grpSlope)
+slopeBars    = input.int(3, "斜率回看根數", minval=1, group=grpSlope)
+
+grpVol = "⑦ 波動率 ATR"
+atrLen       = input.int(14, "ATR 週期", minval=1, group=grpVol)
+atrMaLen     = input.int(50, "ATR 均線", minval=5, group=grpVol)
+minAtrMult   = input.float(0.6, "ATR 下限倍數（太死不做）", minval=0.1, step=0.05, group=grpVol)
+maxAtrMult   = input.float(3.0, "ATR 上限倍數（爆衝不做）", minval=1.0, step=0.05, group=grpVol)
+
+grpScore = "⑧ 共振分數門檻"
+minScore     = input.int(5, "最低共振分數才進場", minval=2, maxval=8, group=grpScore, tooltip="分數項目：本週期趨勢、回檔、RSI、ATR、高週期1、高週期2、ADX、MACD。斜率/K線為硬性條件。")
+cooldownBars = input.int(8, "訊號冷卻根數", minval=1, group=grpScore)
+
+grpRisk = "⑨ 風控目標"
+slAtrMult    = input.float(2.0, "停損 ATR 倍數", minval=0.5, step=0.1, group=grpRisk)
+tp1AtrMult   = input.float(3.0, "TP1 ATR 倍數", minval=0.5, step=0.1, group=grpRisk)
+tp2AtrMult   = input.float(5.0, "TP2 ATR 倍數", minval=1.0, step=0.1, group=grpRisk)
+
+grpSession = "⑩ 時段過濾（小週期建議開）"
+useSession   = input.bool(true, "只做倫敦 / 紐約時段", group=grpSession, tooltip="小週期建議開啟；H4/D1 可關閉。")
+useOverlap   = input.bool(false, "只做倫敦紐約重疊（更嚴）", group=grpSession)
+londonSess   = input.session("0700-1600", "倫敦時段", group=grpSession)
+nySess       = input.session("1300-2100", "紐約時段", group=grpSession)
+
+grpUi = "⑪ 顯示"
+showLevels   = input.bool(true, "訊號顯示停損/停利", group=grpUi)
+showBg       = input.bool(true, "依方向上色背景", group=grpUi)
+showScore    = input.bool(true, "顯示共振分數標籤", group=grpUi)
 
 // ═══════════════════════════════════════════════════════════
-// CALCULATIONS
+// 本週期計算
 // ═══════════════════════════════════════════════════════════
 emaFast = ta.ema(close, emaFastLen)
 emaSlow = ta.ema(close, emaSlowLen)
 emaBias = ta.ema(close, emaBiasLen)
-rsi     = ta.rsi(close, rsiLen)
-atr     = ta.atr(atrLen)
-atrMa   = ta.sma(atr, atrMaLen)
+rsiVal  = ta.rsi(close, rsiLen)
+atrVal  = ta.atr(atrLen)
+atrMa   = ta.sma(atrVal, atrMaLen)
+
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
 
 bullTrend = emaFast > emaSlow and close > emaBias
 bearTrend = emaFast < emaSlow and close < emaBias
 
-volOk = atrMa > 0 and atr / atrMa >= minAtrMult and atr / atrMa <= maxAtrMult
+emaSlopeUp   = emaFast > emaFast[slopeBars]
+emaSlopeDown = emaFast < emaFast[slopeBars]
+slopeLongOk  = not useSlope or emaSlopeUp
+slopeShortOk = not useSlope or emaSlopeDown
+
+volOk = atrMa > 0 and atrVal / atrMa >= minAtrMult and atrVal / atrMa <= maxAtrMult
 
 inLondon = not na(time(timeframe.period, londonSess))
 inNY     = not na(time(timeframe.period, nySess))
-sessionOk = not useSession or inLondon or inNY
+sessionOk = not useSession or (useOverlap ? (inLondon and inNY) : (inLondon or inNY))
 
 pullbackLong  = low <= emaFast * 1.001 and close > emaFast
 pullbackShort = high >= emaFast * 0.999 and close < emaFast
-
-rsiLongOk  = rsi >= rsiBuyLow and rsi <= rsiBuyHigh
-rsiShortOk = rsi <= rsiSellHigh and rsi >= rsiSellLow
-
+rsiLongOk  = rsiVal >= rsiBuyLow and rsiVal <= rsiBuyHigh
+rsiShortOk = rsiVal <= rsiSellHigh and rsiVal >= rsiSellLow
 bullCandle = close > open and close > close[1]
 bearCandle = close < open and close < close[1]
 
-allowLong  = tradeMode != "Short only"
-allowShort = tradeMode != "Long only"
+adxOk = not useAdx or adxVal >= adxMin
+macdLongOk  = not useMacd or (macdHist > 0 and macdHist > macdHist[1])
+macdShortOk = not useMacd or (macdHist < 0 and macdHist < macdHist[1])
 
-longSignal  = allowLong  and bullTrend and pullbackLong and rsiLongOk and volOk and sessionOk and bullCandle
-shortSignal = allowShort and bearTrend and pullbackShort and rsiShortOk and volOk and sessionOk and bearCandle
+// ═══════════════════════════════════════════════════════════
+// 高週期共振
+// ═══════════════════════════════════════════════════════════
+htf1Close = request.security(syminfo.tickerid, htf1, close, lookahead=barmerge.lookahead_off)
+htf1Ema   = request.security(syminfo.tickerid, htf1, ta.ema(close, htfEmaLen), lookahead=barmerge.lookahead_off)
+htf1Bull  = htf1Close > htf1Ema
+htf1Bear  = htf1Close < htf1Ema
+
+htf2Close = request.security(syminfo.tickerid, htf2, close, lookahead=barmerge.lookahead_off)
+htf2Ema   = request.security(syminfo.tickerid, htf2, ta.ema(close, htfEmaLen), lookahead=barmerge.lookahead_off)
+htf2Bull  = htf2Close > htf2Ema
+htf2Bear  = htf2Close < htf2Ema
+
+mtfLongOk  = (not useMtf or htf1Bull) and (not useMtf or not useHtf2 or htf2Bull)
+mtfShortOk = (not useMtf or htf1Bear) and (not useMtf or not useHtf2 or htf2Bear)
+
+// ═══════════════════════════════════════════════════════════
+// 共振打分（滿分約 8）
+// ═══════════════════════════════════════════════════════════
+scoreLong = 0
+scoreLong += bullTrend ? 1 : 0
+scoreLong += pullbackLong ? 1 : 0
+scoreLong += rsiLongOk ? 1 : 0
+scoreLong += volOk ? 1 : 0
+scoreLong += (useMtf and htf1Bull) ? 1 : (useMtf ? 0 : 1)
+scoreLong += (useMtf and useHtf2 and htf2Bull) ? 1 : ((useMtf and useHtf2) ? 0 : 1)
+scoreLong += (useAdx and adxOk) ? 1 : (useAdx ? 0 : 1)
+scoreLong += (useMacd and macdLongOk) ? 1 : (useMacd ? 0 : 1)
+
+scoreShort = 0
+scoreShort += bearTrend ? 1 : 0
+scoreShort += pullbackShort ? 1 : 0
+scoreShort += rsiShortOk ? 1 : 0
+scoreShort += volOk ? 1 : 0
+scoreShort += (useMtf and htf1Bear) ? 1 : (useMtf ? 0 : 1)
+scoreShort += (useMtf and useHtf2 and htf2Bear) ? 1 : ((useMtf and useHtf2) ? 0 : 1)
+scoreShort += (useAdx and adxOk) ? 1 : (useAdx ? 0 : 1)
+scoreShort += (useMacd and macdShortOk) ? 1 : (useMacd ? 0 : 1)
+
+allowLong  = tradeMode != "只做空"
+allowShort = tradeMode != "只做多"
+
+// 硬性條件：方向許可、時段、斜率、陽/陰線、分數門檻
+longSignal  = allowLong and sessionOk and slopeLongOk and bullCandle and scoreLong >= minScore and mtfLongOk and pullbackLong and bullTrend
+shortSignal = allowShort and sessionOk and slopeShortOk and bearCandle and scoreShort >= minScore and mtfShortOk and pullbackShort and bearTrend
 
 var int lastLongBar  = na
 var int lastShortBar = na
@@ -89,51 +165,57 @@ if longFire
 if shortFire
     lastShortBar := bar_index
 
-longSL  = close - atr * slAtrMult
-longTP1 = close + atr * tp1AtrMult
-longTP2 = close + atr * tp2AtrMult
-shortSL  = close + atr * slAtrMult
-shortTP1 = close - atr * tp1AtrMult
-shortTP2 = close - atr * tp2AtrMult
+longSL  = close - atrVal * slAtrMult
+longTP1 = close + atrVal * tp1AtrMult
+longTP2 = close + atrVal * tp2AtrMult
+shortSL  = close + atrVal * slAtrMult
+shortTP1 = close - atrVal * tp1AtrMult
+shortTP2 = close - atrVal * tp2AtrMult
 
 rr1 = slAtrMult > 0 ? tp1AtrMult / slAtrMult : na
 rr2 = slAtrMult > 0 ? tp2AtrMult / slAtrMult : na
 
 // ═══════════════════════════════════════════════════════════
-// PLOTS
+// 繪圖
 // ═══════════════════════════════════════════════════════════
-plot(emaFast, "EMA Fast", color=color.new(#2E7D32, 0), linewidth=2)
-plot(emaSlow, "EMA Slow", color=color.new(#C62828, 0), linewidth=2)
-plot(emaBias, "EMA Bias", color=color.new(#546E7A, 30), linewidth=2)
+plot(emaFast, "快線EMA", color=color.new(#2E7D32, 0), linewidth=2)
+plot(emaSlow, "慢線EMA", color=color.new(#C62828, 0), linewidth=2)
+plot(emaBias, "方向EMA", color=color.new(#546E7A, 30), linewidth=2)
 
-plotshape(longFire,  title="Long",  style=shape.triangleup,   location=location.belowbar, color=color.new(#00C853, 0), size=size.small, text="LONG")
-plotshape(shortFire, title="Short", style=shape.triangledown, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small, text="SHORT")
+plotshape(longFire,  title="做多", style=shape.triangleup,   location=location.belowbar, color=color.new(#00C853, 0), size=size.small, text="做多")
+plotshape(shortFire, title="做空", style=shape.triangledown, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small, text="做空")
 
 bgcolor(showBg ? (bullTrend ? color.new(#1B5E20, 94) : bearTrend ? color.new(#B71C1C, 94) : na) : na)
 
 if showLevels and longFire
-    label.new(bar_index, low, "SL " + str.tostring(longSL, format.mintick) + "\nTP1 " + str.tostring(longTP1, format.mintick) + "\nTP2 " + str.tostring(longTP2, format.mintick), style=label.style_label_up, color=color.new(#00C853, 20), textcolor=color.white, size=size.small)
+    label.new(bar_index, low, "停損 " + str.tostring(longSL, format.mintick) + "\n目標1 " + str.tostring(longTP1, format.mintick) + "\n目標2 " + str.tostring(longTP2, format.mintick) + (showScore ? "\n共振 " + str.tostring(scoreLong) : ""), style=label.style_label_up, color=color.new(#00C853, 20), textcolor=color.white, size=size.small)
 if showLevels and shortFire
-    label.new(bar_index, high, "SL " + str.tostring(shortSL, format.mintick) + "\nTP1 " + str.tostring(shortTP1, format.mintick) + "\nTP2 " + str.tostring(shortTP2, format.mintick), style=label.style_label_down, color=color.new(#FF1744, 20), textcolor=color.white, size=size.small)
+    label.new(bar_index, high, "停損 " + str.tostring(shortSL, format.mintick) + "\n目標1 " + str.tostring(shortTP1, format.mintick) + "\n目標2 " + str.tostring(shortTP2, format.mintick) + (showScore ? "\n共振 " + str.tostring(scoreShort) : ""), style=label.style_label_down, color=color.new(#FF1744, 20), textcolor=color.white, size=size.small)
 
-alertcondition(longFire,  title="Gold MMM Long",  message="Gold MMM LONG | {{ticker}} @ {{close}}")
-alertcondition(shortFire, title="Gold MMM Short", message="Gold MMM SHORT | {{ticker}} @ {{close}}")
-alertcondition(longFire or shortFire, title="Gold MMM Any Entry", message="Gold MMM ENTRY | {{ticker}} @ {{close}}")
+alertcondition(longFire,  title="黃金MMM做多", message="黃金MMM 做多 | {{ticker}} @ {{close}}")
+alertcondition(shortFire, title="黃金MMM做空", message="黃金MMM 做空 | {{ticker}} @ {{close}}")
+alertcondition(longFire or shortFire, title="黃金MMM任一進場", message="黃金MMM 進場 | {{ticker}} @ {{close}}")
 
-var table dash = table.new(position.top_right, 2, 7, bgcolor=color.new(#102027, 20), border_width=1)
+var table dash = table.new(position.top_right, 2, 10, bgcolor=color.new(#102027, 15), border_width=1)
 if barstate.islast
-    table.cell(dash, 0, 0, "Gold MMM", text_color=color.white, text_size=size.small)
-    table.cell(dash, 1, 0, "H4/D1", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 0, 1, "Bias", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 1, bullTrend ? "BULL" : bearTrend ? "BEAR" : "RANGE", text_color=bullTrend ? color.lime : bearTrend ? color.red : color.orange, text_size=size.small)
-    table.cell(dash, 0, 2, "RSI", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 2, str.tostring(rsi, "#.1"), text_color=color.white, text_size=size.small)
-    table.cell(dash, 0, 3, "ATR%", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 3, atrMa > 0 ? str.tostring(atr / atrMa * 100, "#.0") + "%" : "-", text_color=volOk ? color.lime : color.orange, text_size=size.small)
-    table.cell(dash, 0, 4, "Session", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 4, sessionOk ? "OK" : "OFF", text_color=sessionOk ? color.lime : color.red, text_size=size.small)
-    table.cell(dash, 0, 5, "R:R", text_color=color.gray, text_size=size.small)
-    table.cell(dash, 1, 5, "1:" + str.tostring(rr1, "#.1") + " / 1:" + str.tostring(rr2, "#.1"), text_color=color.white, text_size=size.small)
-    table.cell(dash, 0, 6, "Ready", text_color=color.gray, text_size=size.small)
-    readyTxt = longFire ? "LONG" : shortFire ? "SHORT" : "WAIT"
-    table.cell(dash, 1, 6, readyTxt, text_color=longFire ? color.lime : shortFire ? color.red : color.gray, text_size=size.small)
+    table.cell(dash, 0, 0, "黃金MMM", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, "共振版", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 1, "本週期", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 1, bullTrend ? "多頭" : bearTrend ? "空頭" : "盤整", text_color=bullTrend ? color.lime : bearTrend ? color.red : color.orange, text_size=size.small)
+    table.cell(dash, 0, 2, "高週期1", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 2, not useMtf ? "關閉" : htf1Bull ? "多" : htf1Bear ? "空" : "-", text_color=not useMtf ? color.gray : htf1Bull ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 0, 3, "高週期2", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 3, not useMtf or not useHtf2 ? "關閉" : htf2Bull ? "多" : htf2Bear ? "空" : "-", text_color=not useMtf or not useHtf2 ? color.gray : htf2Bull ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 0, 4, "ADX", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 4, str.tostring(adxVal, "#.0"), text_color=adxOk ? color.lime : color.orange, text_size=size.small)
+    table.cell(dash, 0, 5, "MACD柱", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, macdHist > 0 ? "多動能" : "空動能", text_color=macdHist > 0 ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 0, 6, "時段", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 6, sessionOk ? "可做" : "休息", text_color=sessionOk ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 0, 7, "多分數", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 7, str.tostring(scoreLong) + " / 8", text_color=scoreLong >= minScore ? color.lime : color.orange, text_size=size.small)
+    table.cell(dash, 0, 8, "空分數", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 8, str.tostring(scoreShort) + " / 8", text_color=scoreShort >= minScore ? color.lime : color.orange, text_size=size.small)
+    table.cell(dash, 0, 9, "狀態", text_color=color.gray, text_size=size.small)
+    readyTxt = longFire ? "做多" : shortFire ? "做空" : "等待"
+    table.cell(dash, 1, 9, readyTxt, text_color=longFire ? color.lime : shortFire ? color.red : color.gray, text_size=size.small)

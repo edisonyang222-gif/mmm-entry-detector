@@ -105,6 +105,10 @@ int WAIT = 4
 int ENT = 5
 int INV = 6
 
+// 提前宣告：ICT 演算法函式會讀取階段（Pine 不可引用尚未宣告的識別字）
+var int bPhase = IDLE
+var int sPhase = IDLE
+
 f_phaseName(int p) =>
     switch p
         ACC => "累積中"
@@ -514,7 +518,6 @@ f_entryConfirmed(bool isBuy, float entry, float fvgTop, float fvgBot) =>
     ok
 
 // ---- Buy state ----
-var int bPhase = IDLE
 var float bAccHi = float(na)
 var float bAccLo = float(na)
 var int bAccStartBar = 0
@@ -532,7 +535,6 @@ var float bSL = float(na)
 var float bTP = float(na)
 
 // ---- Sell state ----
-var int sPhase = IDLE
 var float sAccHi = float(na)
 var float sAccLo = float(na)
 var int sAccStartBar = 0

@@ -26,20 +26,17 @@ bool   useErlIrl = input.bool(true, "啟用ERL↔IRL判別", group="ERL/IRL流�
 int    dealRangeLen = input.int(50, "Dealing Range 回看根數", minval=10, group="ERL/IRL流動性")
 float  eqTolPct = input.float(0.05, "視為到達IRL(均衡)容差（佔區間）", minval=0.01, maxval=0.25, step=0.01, group="ERL/IRL流動性")
 bool   erlIrlFilter = input.bool(false, "進場需順DOL方向", group="ERL/IRL流動性", tooltip="開啟後：多單需DOL偏多、空單需DOL偏空")
-bool   showDealRange = input.bool(false, "顯示ERL/IRL價位線（易亂，預設關）", group="ERL/IRL流動性")
 
 // ===== ERT 交易系統（Entry / Risk / Target）=====
-bool   ertLabels = input.bool(true, "標示 E / R / T1 / T2", group="ERT交易系統", tooltip="E=進場價、R=風險停損、T1=1R部分停利、T2=最終目標")
 bool   ertRequireHtf = input.bool(true, "ERT強制要求HTF同向", group="ERT交易系統")
 float  ertT1RR = input.float(1.0, "T1 部分目標（報酬比）", minval=0.5, step=0.5, group="ERT交易系統")
-bool   showErtChecklist = input.bool(true, "狀態表顯示ERT清單", group="ERT交易系統")
+bool   showErtChecklist = input.bool(true, "狀態表顯示模型列", group="ERT交易系統")
 
 // ===== 盈虧比 / 停損停利 =====
 string tpMode = input.string("兩者取遠", "停利計算方式", options=["固定報酬比", "結構投射", "兩者取遠"], group="盈虧設定", tooltip="固定報酬比=進場±風險×目標倍數；結構投射=掃蕩深度投射；兩者取遠=取較遠目標（報酬比較高）")
 float  targetRR = input.float(2.0, "目標報酬比（1:X）= T2", minval=0.5, step=0.5, group="盈虧設定")
 float  minRR = input.float(1.5, "最小可接受報酬比", minval=0.5, step=0.1, group="盈虧設定", tooltip="算出來的實際RR低於此值，整筆設定作廢")
 float  stopBufAtrMult = input.float(0.05, "停損緩衝（×ATR）", minval=0.0, step=0.01, group="盈虧設定")
-bool   showTP1 = input.bool(true, "另外標示 1R / T1 參考線", group="盈虧設定")
 
 // ===== 結構偵測 =====
 int   lookback = input.int(20, "累積區間回看根數", minval=5, group="結構偵測")
@@ -61,13 +58,10 @@ bool showPending = input.bool(false, "顯示等待回踩背景", group="顯示�
 bool showRrBoxes = input.bool(false, "顯示進場區短色帶（可選）", group="顯示設定")
 int  boxBars = input.int(12, "短色帶根數", minval=3, maxval=50, group="顯示設定")
 
-color buyRiskCol = input.color(color.new(#ef5350, 75), "作多風險區顏色", group="顏色")
-color buyRewardCol = input.color(color.new(#26a69a, 75), "作多獲利區顏色", group="顏色")
-color sellRiskCol = input.color(color.new(#ef5350, 75), "作空風險區顏色", group="顏色")
-color sellRewardCol = input.color(color.new(#26a69a, 75), "作空獲利區顏色", group="顏色")
-color fvgCol = input.color(color.new(#42a5f5, 80), "失衡區框顏色", group="顏色")
-color accCol = input.color(color.new(#ab47bc, 88), "累積框顏色", group="顏色")
-color pendingCol = input.color(color.new(#ffca28, 85), "等待回踩框顏色", group="顏色")
+color buyRiskCol = input.color(color.new(#ef5350, 80), "作多風險色帶", group="顏色")
+color buyRewardCol = input.color(color.new(#26a69a, 80), "作多獲利色帶", group="顏色")
+color sellRiskCol = input.color(color.new(#ef5350, 80), "作空風險色帶", group="顏色")
+color sellRewardCol = input.color(color.new(#26a69a, 80), "作空獲利色帶", group="顏色")
 
 bool isErtMode = entryModel == "ERT交易系統"
 bool htfFilterOn = useHtfFilter or (isErtMode and ertRequireHtf)

@@ -1,8 +1,8 @@
 # MMXM Entry Detector
 
-ICT **Market Maker Model (MMXM)** 進場偵測：HTF 偏向 → LTF 累積 → 掃蕩 → 擴張 → FVG 回踩進場。
+ICT **Market Maker Model (MMXM)** 進場偵測：HTF 偏向 → ERL/IRL 流動性路徑 → LTF 累積 → 掃蕩 → 擴張 → FVG 回踩進場。
 
-TradingView 預設為 **ERT 交易系統**（Entry / Risk / Target）：高週期過濾 + 低週期 MMXM 第四階段，圖上標 E / R / T1 / T2。
+TradingView 預設為 **ERT 交易系統**（Entry / Risk / Target）：高週期過濾 + ERL↔IRL 方向 + 低週期 MMXM 第四階段。
 
 這個 repo 同時提供 **三種用法**：
 

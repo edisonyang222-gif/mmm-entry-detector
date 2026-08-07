@@ -26,7 +26,7 @@ bool   useErlIrl = input.bool(true, "啟用ERL↔IRL判別", group="ERL/IRL流�
 int    dealRangeLen = input.int(50, "Dealing Range 回看根數", minval=10, group="ERL/IRL流動性")
 float  eqTolPct = input.float(0.05, "視為到達IRL(均衡)容差（佔區間）", minval=0.01, maxval=0.25, step=0.01, group="ERL/IRL流動性")
 bool   erlIrlFilter = input.bool(false, "進場需順DOL方向", group="ERL/IRL流動性", tooltip="開啟後：多單需DOL偏多、空單需DOL偏空")
-bool   showDealRange = input.bool(true, "顯示ERL高/低與IRL均衡線", group="ERL/IRL流動性")
+bool   showDealRange = input.bool(false, "顯示ERL/IRL價位線（易亂，預設關）", group="ERL/IRL流動性")
 
 // ===== ERT 交易系統（Entry / Risk / Target）=====
 bool   ertLabels = input.bool(true, "標示 E / R / T1 / T2", group="ERT交易系統", tooltip="E=進場價、R=風險停損、T1=1R部分停利、T2=最終目標")
@@ -52,17 +52,14 @@ float dispBodyRatio = input.float(0.55, "位移K線實體比例", minval=0.1, ma
 float dispAtrMult = input.float(0.9, "位移K線最小幅度（×ATR）", minval=0.1, step=0.1, group="結構偵測")
 int   maxWaitBars = input.int(20, "最多等待回踩根數", minval=3, group="結構偵測")
 
-// ===== 顯示 =====
+// ===== 顯示（預設精簡：圖上只留進場三角，盈虧看右上表）=====
 bool showBuy = input.bool(true, "顯示作多模型（MMBM）", group="顯示設定")
 bool showSell = input.bool(true, "顯示作空模型（MMSM）", group="顯示設定")
-bool showRrBoxes = input.bool(true, "顯示盈虧色帶", group="顯示設定")
-bool showLevelLines = input.bool(true, "顯示E/R/T橫貫價位線", group="顯示設定")
-bool showFvgBox = input.bool(false, "顯示失衡區框（已停用）", group="顯示設定")
-bool showAccBox = input.bool(false, "顯示累積區間框（已停用）", group="顯示設定")
-bool showPending = input.bool(true, "顯示等待回踩背景", group="顯示設定")
-bool showMarkers = input.bool(true, "顯示進場標記", group="顯示設定")
-bool showInfoTable = input.bool(true, "顯示右上固定盈虧表", group="顯示設定")
-int  boxBars = input.int(25, "進場區色帶根數", minval=5, maxval=200, group="顯示設定")
+bool showMarkers = input.bool(true, "顯示進場三角標記", group="顯示設定")
+bool showInfoTable = input.bool(true, "顯示右上固定資訊表", group="顯示設定")
+bool showPending = input.bool(false, "顯示等待回踩背景", group="顯示設定")
+bool showRrBoxes = input.bool(false, "顯示進場區短色帶（可選）", group="顯示設定")
+int  boxBars = input.int(12, "短色帶根數", minval=3, maxval=50, group="顯示設定")
 
 color buyRiskCol = input.color(color.new(#ef5350, 75), "作多風險區顏色", group="顏色")
 color buyRewardCol = input.color(color.new(#26a69a, 75), "作多獲利區顏色", group="顏色")
@@ -616,30 +613,13 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
             sellRR := f_registerSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             sPhase := ENT
 
-// ---- 畫面固定：最新一筆 E/R/T 畫成橫貫價位線 + 色帶（移動圖表仍看得到）----
-var line lnE = na
-var line lnR = na
-var line lnT = na
-var line lnT1 = na
-var line lnErlHi = na
-var line lnErlLo = na
-var line lnIrlEq = na
-var line lnDol = na
-var linefill fillRisk = na
-var linefill fillRew = na
-var label labE = na
-var label labR = na
-var label labT = na
-var label labT1 = na
-var label labDol = na
-
+// ---- 最新訊號數值（只給右上表用；圖上不畫滿版線）----
 float lastEntry = float(na)
 float lastSl = float(na)
 float lastTp = float(na)
 float lastT1 = float(na)
 float lastRr = float(na)
 bool lastIsBuy = false
-int lastX1 = na
 string lastSide = "-"
 
 if array.size(trades) > 0
@@ -651,91 +631,15 @@ if array.size(trades) > 0
     lastT1 := lastT.isBuy ? lastT.entry + lastRisk * ertT1RR : lastT.entry - lastRisk * ertT1RR
     lastRr := lastRisk > 0.0 ? math.abs(lastT.tp - lastT.entry) / lastRisk : float(na)
     lastIsBuy := lastT.isBuy
-    lastX1 := lastT.x1
     lastSide := lastT.isBuy ? "作多" : "作空"
 
-if barstate.islast
-    // 刪掉舊線再建，避免殘留
-    if not na(lnE)
-        line.delete(lnE)
-    if not na(lnR)
-        line.delete(lnR)
-    if not na(lnT)
-        line.delete(lnT)
-    if not na(lnT1)
-        line.delete(lnT1)
-    if not na(lnErlHi)
-        line.delete(lnErlHi)
-    if not na(lnErlLo)
-        line.delete(lnErlLo)
-    if not na(lnIrlEq)
-        line.delete(lnIrlEq)
-    if not na(lnDol)
-        line.delete(lnDol)
-    if not na(fillRisk)
-        linefill.delete(fillRisk)
-    if not na(fillRew)
-        linefill.delete(fillRew)
-    if not na(labE)
-        label.delete(labE)
-    if not na(labR)
-        label.delete(labR)
-    if not na(labT)
-        label.delete(labT)
-    if not na(labT1)
-        label.delete(labT1)
-    if not na(labDol)
-        label.delete(labDol)
-    lnE := na
-    lnR := na
-    lnT := na
-    lnT1 := na
-    lnErlHi := na
-    lnErlLo := na
-    lnIrlEq := na
-    lnDol := na
-    fillRisk := na
-    fillRew := na
-    labE := na
-    labR := na
-    labT := na
-    labT1 := na
-    labDol := na
-
-    if useErlIrl and showDealRange and not na(drHi) and not na(drLo)
-        int xL = math.max(bar_index - dealRangeLen, 0)
-        int xR = bar_index + boxBars
-        lnErlHi := line.new(xL, drHi, xR, drHi, color=color.new(#42a5f5, 0), width=1, style=line.style_dashed, extend=extend.both)
-        lnErlLo := line.new(xL, drLo, xR, drLo, color=color.new(#42a5f5, 0), width=1, style=line.style_dashed, extend=extend.both)
-        lnIrlEq := line.new(xL, drEq, xR, drEq, color=color.new(#ab47bc, 0), width=1, style=line.style_dotted, extend=extend.both)
-        if not na(dolTarget)
-            color dolC = dolDir > 0 ? color.teal : dolDir < 0 ? color.orange : color.gray
-            lnDol := line.new(xL, dolTarget, xR, dolTarget, color=dolC, width=2, extend=extend.both)
-            labDol := label.new(bar_index, dolTarget, f_dolPathName() + " → " + f_dolTargetName(), style=label.style_label_left, color=color.new(dolC, 20), textcolor=color.white, size=size.normal)
-
-    if not na(lastEntry) and not na(lastX1) and showLevelLines
-        color eC = lastIsBuy ? color.teal : color.orange
-        int xRight = bar_index + boxBars
-        lnE := line.new(lastX1, lastEntry, xRight, lastEntry, color=eC, width=2, extend=extend.both)
-        lnR := line.new(lastX1, lastSl, xRight, lastSl, color=color.red, width=2, style=line.style_dashed, extend=extend.both)
-        lnT := line.new(lastX1, lastTp, xRight, lastTp, color=color.lime, width=2, style=line.style_dashed, extend=extend.both)
-        if showTP1 or isErtMode or ertLabels
-            lnT1 := line.new(lastX1, lastT1, xRight, lastT1, color=color.new(color.yellow, 20), width=1, style=line.style_dotted, extend=extend.both)
-            labT1 := label.new(bar_index, lastT1, "T1 " + f_px(lastT1), style=label.style_label_left, color=color.new(color.yellow, 70), textcolor=color.black, size=size.small)
-        if showRrBoxes
-            fillRisk := linefill.new(lnE, lnR, lastIsBuy ? buyRiskCol : sellRiskCol)
-            fillRew := linefill.new(lnE, lnT, lastIsBuy ? buyRewardCol : sellRewardCol)
-        labE := label.new(bar_index, lastEntry, (isErtMode or ertLabels ? "E " : "進場 ") + f_px(lastEntry), style=label.style_label_left, color=color.new(eC, 20), textcolor=color.white, size=size.normal)
-        labR := label.new(bar_index, lastSl, (isErtMode or ertLabels ? "R " : "停損 ") + f_px(lastSl), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.normal)
-        labT := label.new(bar_index, lastTp, (isErtMode or ertLabels ? "T2 " : "停利 ") + f_px(lastTp), style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.normal)
-
-// 進場當根附近也留一段 plot 色帶（跟K線）
+// 可選：進場附近短色帶（預設關，避免整圖亂）
 float rrEntry = float(na)
 float rrSl = float(na)
 float rrTp = float(na)
 bool rrOn = false
 bool rrIsBuy = false
-if array.size(trades) > 0
+if showRrBoxes and array.size(trades) > 0
     for i = 0 to array.size(trades) - 1
         TradeSetup t = array.get(trades, i)
         if bar_index >= t.x1 and bar_index <= t.x1 + boxBars
@@ -745,75 +649,50 @@ if array.size(trades) > 0
             rrOn := true
             rrIsBuy := t.isBuy
 
-plotE = plot(showRrBoxes and rrOn ? rrEntry : na, title="E區", color=color.new(color.teal, 100), style=plot.style_linebr)
-plotR = plot(showRrBoxes and rrOn ? rrSl : na, title="R區", color=color.new(color.red, 100), style=plot.style_linebr)
-plotT = plot(showRrBoxes and rrOn ? rrTp : na, title="T區", color=color.new(color.lime, 100), style=plot.style_linebr)
-fill(plotE, plotR, title="風險區", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRiskCol : sellRiskCol) : na)
-fill(plotE, plotT, title="目標區", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRewardCol : sellRewardCol) : na)
+plotE = plot(rrOn ? rrEntry : na, title="E區", color=color.new(color.teal, 100), style=plot.style_linebr)
+plotR = plot(rrOn ? rrSl : na, title="R區", color=color.new(color.red, 100), style=plot.style_linebr)
+plotT = plot(rrOn ? rrTp : na, title="T區", color=color.new(color.lime, 100), style=plot.style_linebr)
+fill(plotE, plotR, title="風險區", color=rrOn ? (rrIsBuy ? buyRiskCol : sellRiskCol) : na)
+fill(plotE, plotT, title="目標區", color=rrOn ? (rrIsBuy ? buyRewardCol : sellRewardCol) : na)
 
-bgcolor(showPending and bPhase == WAIT ? color.new(#ffca28, 88) : na, title="等待作多回踩")
-bgcolor(showPending and sPhase == WAIT ? color.new(#ffb300, 88) : na, title="等待作空回踩")
+bgcolor(showPending and bPhase == WAIT ? color.new(#ffca28, 90) : na, title="等待作多回踩")
+bgcolor(showPending and sPhase == WAIT ? color.new(#ffb300, 90) : na, title="等待作空回踩")
 
-plotshape(showMarkers and showBuy and buySignal and isErtMode, title="ERT作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="E多")
-plotshape(showMarkers and showBuy and buySignal and not isErtMode, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="作多")
-plotshape(showMarkers and showSell and sellSignal and isErtMode, title="ERT作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="E空")
-plotshape(showMarkers and showSell and sellSignal and not isErtMode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="作空")
+plotshape(showMarkers and showBuy and buySignal and isErtMode, title="ERT作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="E多")
+plotshape(showMarkers and showBuy and buySignal and not isErtMode, title="作多進場", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="作多")
+plotshape(showMarkers and showSell and sellSignal and isErtMode, title="ERT作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="E空")
+plotshape(showMarkers and showSell and sellSignal and not isErtMode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="作空")
 
-// 右上表格 = 真正畫面固定（捲動也不會跑）
-var table info = table.new(position.top_right, 2, 19, bgcolor=color.new(#111111, 20), border_width=1, border_color=color.gray)
+// 右上精簡表：盈虧 + 流動性路徑（畫面固定，不佔滿圖）
+var table info = table.new(position.top_right, 2, 12, bgcolor=color.new(#111111, 15), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
     color dolCol = dolDir > 0 ? color.teal : dolDir < 0 ? color.orange : color.gray
-    table.cell(info, 0, 0, "流動性路徑", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 0, "流動性", text_color=color.white, text_size=size.small)
     table.cell(info, 1, 0, f_dolPathName(), text_color=dolCol, text_size=size.small)
-    table.cell(info, 0, 1, "DOL目標", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 1, f_dolTargetName(), text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 2, "最近ERL掃蕩", text_color=color.gray, text_size=size.tiny)
-    string erlSweepTxt = lastErlSide > 0 ? "ERL高(BSL)" : lastErlSide < 0 ? "ERL低(SSL)" : "尚無"
-    table.cell(info, 1, 2, erlSweepTxt, text_color=color.aqua, text_size=size.tiny)
-    table.cell(info, 0, 3, "ERT畫面固定", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 3, lastSide, text_color=lastIsBuy ? color.teal : color.orange, text_size=size.small)
-    table.cell(info, 0, 4, "E 進場", text_color=color.aqua, text_size=size.small)
-    table.cell(info, 1, 4, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 5, "R 停損", text_color=color.red, text_size=size.small)
-    table.cell(info, 1, 5, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 6, "T1", text_color=color.yellow, text_size=size.small)
-    table.cell(info, 1, 6, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 7, "T2 停利", text_color=color.lime, text_size=size.small)
-    table.cell(info, 1, 7, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 8, "報酬比", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 8, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
-    table.cell(info, 0, 9, "模型", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 9, entryModel, text_color=color.aqua, text_size=size.tiny)
-    table.cell(info, 0, 10, "HTF偏向", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 1, "DOL", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 1, f_dolTargetName(), text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 2, "方向", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 2, lastSide, text_color=lastIsBuy ? color.teal : color.orange, text_size=size.tiny)
+    table.cell(info, 0, 3, "E", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 1, 3, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 4, "R", text_color=color.red, text_size=size.small)
+    table.cell(info, 1, 4, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 5, "T1", text_color=color.yellow, text_size=size.small)
+    table.cell(info, 1, 5, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 6, "T2", text_color=color.lime, text_size=size.small)
+    table.cell(info, 1, 6, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 7, "RR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 7, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
+    table.cell(info, 0, 8, "HTF", text_color=color.gray, text_size=size.tiny)
     color htfCol = htfBias > 0 ? color.teal : htfBias < 0 ? color.orange : color.gray
-    string htfTxt = htfFilterOn ? f_htfName(htfBias) + " (" + (htfTf == "" ? "自動" : htfTf) + ")" : "關閉"
-    table.cell(info, 1, 10, htfTxt, text_color=htfCol, text_size=size.tiny)
-    table.cell(info, 0, 11, "確認方式", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 11, entryTrigger, text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 12, "作多階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 12, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 13, "作空階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 13, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 14, "作多等待E", text_color=color.gray, text_size=size.tiny)
-    string bGate = (f_htfAllows(true) ? "" : "·等HTF") + (f_dolAllows(true) ? "" : "·等DOL")
-    string bWait = bPhase == WAIT and not na(bEntry) ? f_px(bEntry) + bGate : "-"
-    table.cell(info, 1, 14, bWait, text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 15, "作空等待E", text_color=color.gray, text_size=size.tiny)
-    string sGate = (f_htfAllows(false) ? "" : "·等HTF") + (f_dolAllows(false) ? "" : "·等DOL")
-    string sWait = sPhase == WAIT and not na(sEntry) ? f_px(sEntry) + sGate : "-"
-    table.cell(info, 1, 15, sWait, text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 16, "區間收斂", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 16, candTight ? "是" : "否", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
+    table.cell(info, 1, 8, htfFilterOn ? f_htfName(htfBias) : "關", text_color=htfCol, text_size=size.tiny)
+    table.cell(info, 0, 9, "多階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 9, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 10, "空階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 10, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
     if showErtChecklist
-        bool ertE = not na(lastEntry) or bPhase == WAIT or sPhase == WAIT
-        bool ertR = not na(lastSl) or (bPhase == WAIT and not na(bSL)) or (sPhase == WAIT and not na(sSL))
-        bool ertT = not na(lastTp)
-        bool ertH = f_htfAllows(true) or f_htfAllows(false) or not htfFilterOn
-        table.cell(info, 0, 17, "ERT清單", text_color=color.white, text_size=size.tiny)
-        table.cell(info, 1, 17, "E" + (ertE ? "✓" : "·") + " R" + (ertR ? "✓" : "·") + " T" + (ertT ? "✓" : "·"), text_color=color.aqua, text_size=size.tiny)
-        table.cell(info, 0, 18, "HTF/DOL過濾", text_color=color.gray, text_size=size.tiny)
-        string filtTxt = (htfFilterOn ? (ertH ? "HTF✓" : "HTF擋") : "HTF關") + " / " + (useErlIrl ? (erlIrlFilter ? (dolDir != 0 ? "DOL開" : "DOL中性") : "DOL顯示") : "DOL關")
-        table.cell(info, 1, 18, filtTxt, text_color=color.lime, text_size=size.tiny)
+        table.cell(info, 0, 11, "模型", text_color=color.gray, text_size=size.tiny)
+        table.cell(info, 1, 11, entryModel, text_color=color.aqua, text_size=size.tiny)
 
 alertcondition(buySignal, "作多進場", "ICT MMXM/ERT 作多進場")
 alertcondition(sellSignal, "作空進場", "ICT MMXM/ERT 作空進場")

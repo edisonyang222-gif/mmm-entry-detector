@@ -135,7 +135,7 @@ class Params:
     htf_ema: int = 50
     use_adx: bool = True
     adx_len: int = 14
-    adx_min: float = 20.0
+    adx_min: float = 18.0
     use_macd: bool = True
     use_slope: bool = True
     slope_bars: int = 3
@@ -144,12 +144,12 @@ class Params:
     use_range_filter: bool = True
     use_chop: bool = True
     chop_len: int = 14
-    chop_max: float = 61.8
+    chop_max: float = 65.0
     use_ema_squeeze: bool = True
-    ema_gap_min_atr: float = 0.35
+    ema_gap_min_atr: float = 0.25
     use_er: bool = True
     er_len: int = 10
-    er_min: float = 0.25
+    er_min: float = 0.18
     # 若 base TF 已是 H1，htf1 應設 4h、htf2 設 1D（由 CLI 覆寫）
 
 

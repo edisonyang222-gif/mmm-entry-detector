@@ -1,0 +1,241 @@
+//@version=5
+indicator("MMXM Entry Detector", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// ICT Market Maker Model entry detector
+// Phases: Accumulation -> Manipulation (SSL/BSL) -> Expansion -> FVG Entry
+
+lookback          = input.int(20, "Accumulation Lookback", minval=5)
+atrPeriod         = input.int(14, "ATR Period", minval=1)
+maxRangeAtrMult   = input.float(3.5, "Max Range ATR Mult", minval=0.1, step=0.1)
+manipAtrMult      = input.float(0.3, "Manipulation ATR Mult", minval=0.0, step=0.05)
+dispBodyRatio     = input.float(0.65, "Displacement Body Ratio", minval=0.1, maxval=1.0, step=0.05)
+dispAtrMult       = input.float(0.8, "Displacement ATR Mult", minval=0.1, step=0.1)
+minRR             = input.float(1.5, "Min Risk/Reward", minval=0.1, step=0.1)
+stopBufAtrMult    = input.float(0.05, "Stop Buffer ATR Mult", minval=0.0, step=0.01)
+entryFill         = input.string("midpoint", "Entry Fill", options=["midpoint", "proximal", "distal"])
+showBuy           = input.bool(true, "Show Buy Model (MMBM)")
+showSell          = input.bool(true, "Show Sell Model (MMSM)")
+showLevels        = input.bool(true, "Show Entry/SL/TP Lines")
+
+atrVal = ta.atr(atrPeriod)
+rangeHigh = ta.highest(high, lookback)
+rangeLow  = ta.lowest(low, lookback)
+
+// phases
+IDLE = 0
+ACC  = 1
+MAN  = 2
+EXP  = 3
+ENT  = 4
+INV  = 5
+
+f_isDisp(bull) =>
+    rng = high - low
+    body = math.abs(close - open)
+    ok = rng > 0 and not na(atrVal) and atrVal > 0 and body / rng >= dispBodyRatio and rng >= dispAtrMult * atrVal
+    ok and (bull ? close > open : close < open)
+
+f_fvgTop(bull) =>
+    bull ? low : low[2]
+
+f_fvgBot(bull) =>
+    bull ? high[2] : high
+
+f_hasFvg(bull) =>
+    bull ? low > high[2] : high < low[2]
+
+f_entryFromFvg(bull, top, bot) =>
+    proximal = bull ? bot : top
+    distal   = bull ? top : bot
+    mid      = (top + bot) * 0.5
+    entryFill == "proximal" ? proximal : entryFill == "distal" ? distal : mid
+
+f_reset() =>
+    [IDLE, na, na, na, na, na, na, 0]
+
+// Buy state
+var int   bPhase = IDLE
+var float bAccHi = na
+var float bAccLo = na
+var float bManip = na
+var int   bExpBar = 0
+var float bFvgTop = na
+var float bFvgBot = na
+
+// Sell state
+var int   sPhase = IDLE
+var float sAccHi = na
+var float sAccLo = na
+var float sManip = na
+var int   sExpBar = 0
+var float sFvgTop = na
+var float sFvgBot = na
+
+buySignal = false
+sellSignal = false
+buyEntry = na
+buySL = na
+buyTP = na
+sellEntry = na
+sellSL = na
+sellTP = na
+
+isTight = not na(atrVal) and atrVal > 0 and (rangeHigh - rangeLow) <= maxRangeAtrMult * atrVal
+
+// -------- BUY MODEL --------
+if bar_index >= math.max(lookback, atrPeriod)
+    if bPhase == ENT or bPhase == INV
+        bPhase := IDLE
+        bAccHi := na
+        bAccLo := na
+        bManip := na
+        bExpBar := 0
+        bFvgTop := na
+        bFvgBot := na
+
+    frozenHi = bAccHi
+    frozenLo = bAccLo
+
+    if bPhase == IDLE or bPhase == ACC
+        if bPhase == ACC and not na(frozenLo) and low < frozenLo - manipAtrMult * atrVal
+            bPhase := MAN
+            bManip := low
+            bAccHi := frozenHi
+            bAccLo := frozenLo
+        else if isTight
+            bPhase := ACC
+            bAccHi := rangeHigh
+            bAccLo := rangeLow
+        else
+            bPhase := IDLE
+            bAccHi := na
+            bAccLo := na
+    else if bPhase == MAN
+        if low < bManip
+            bManip := low
+        bullDisp = f_isDisp(true) and close > bAccHi
+        if bullDisp
+            bPhase := EXP
+            bExpBar := bar_index
+            if f_hasFvg(true)
+                bFvgTop := f_fvgTop(true)
+                bFvgBot := f_fvgBot(true)
+        else if close < bAccLo - manipAtrMult * atrVal * 3
+            bPhase := INV
+    else if bPhase == EXP
+        if na(bFvgTop) and f_hasFvg(true)
+            bFvgTop := f_fvgTop(true)
+            bFvgBot := f_fvgBot(true)
+        if not na(bFvgTop)
+            e1 = f_entryFromFvg(true, bFvgTop, bFvgBot)
+            e2 = bFvgBot  // proximal fallback
+            buf = stopBufAtrMult * atrVal
+            sl = bManip - buf
+            depth = bAccHi - bManip
+            tp = math.max(bAccHi + depth, bAccHi + (bAccHi - bAccLo))
+            rr1 = (e1 - sl) > 0 ? (tp - e1) / (e1 - sl) : 0.0
+            rr2 = (e2 - sl) > 0 ? (tp - e2) / (e2 - sl) : 0.0
+            if rr1 >= minRR
+                buySignal := true
+                buyEntry := e1
+                buySL := sl
+                buyTP := tp
+                bPhase := ENT
+            else if rr2 >= minRR
+                buySignal := true
+                buyEntry := e2
+                buySL := sl
+                buyTP := tp
+                bPhase := ENT
+            else
+                bPhase := INV
+        else if bar_index - bExpBar >= 3
+            bPhase := INV
+
+// -------- SELL MODEL --------
+if bar_index >= math.max(lookback, atrPeriod)
+    if sPhase == ENT or sPhase == INV
+        sPhase := IDLE
+        sAccHi := na
+        sAccLo := na
+        sManip := na
+        sExpBar := 0
+        sFvgTop := na
+        sFvgBot := na
+
+    frozenHi = sAccHi
+    frozenLo = sAccLo
+
+    if sPhase == IDLE or sPhase == ACC
+        if sPhase == ACC and not na(frozenHi) and high > frozenHi + manipAtrMult * atrVal
+            sPhase := MAN
+            sManip := high
+            sAccHi := frozenHi
+            sAccLo := frozenLo
+        else if isTight
+            sPhase := ACC
+            sAccHi := rangeHigh
+            sAccLo := rangeLow
+        else
+            sPhase := IDLE
+            sAccHi := na
+            sAccLo := na
+    else if sPhase == MAN
+        if high > sManip
+            sManip := high
+        bearDisp = f_isDisp(false) and close < sAccLo
+        if bearDisp
+            sPhase := EXP
+            sExpBar := bar_index
+            if f_hasFvg(false)
+                sFvgTop := f_fvgTop(false)
+                sFvgBot := f_fvgBot(false)
+        else if close > sAccHi + manipAtrMult * atrVal * 3
+            sPhase := INV
+    else if sPhase == EXP
+        if na(sFvgTop) and f_hasFvg(false)
+            sFvgTop := f_fvgTop(false)
+            sFvgBot := f_fvgBot(false)
+        if not na(sFvgTop)
+            e1 = f_entryFromFvg(false, sFvgTop, sFvgBot)
+            e2 = sFvgTop  // proximal fallback
+            buf = stopBufAtrMult * atrVal
+            sl = sManip + buf
+            depth = sManip - sAccLo
+            tp = math.min(sAccLo - depth, sAccLo - (sAccHi - sAccLo))
+            rr1 = (sl - e1) > 0 ? (e1 - tp) / (sl - e1) : 0.0
+            rr2 = (sl - e2) > 0 ? (e2 - tp) / (sl - e2) : 0.0
+            if rr1 >= minRR
+                sellSignal := true
+                sellEntry := e1
+                sellSL := sl
+                sellTP := tp
+                sPhase := ENT
+            else if rr2 >= minRR
+                sellSignal := true
+                sellEntry := e2
+                sellSL := sl
+                sellTP := tp
+                sPhase := ENT
+            else
+                sPhase := INV
+        else if bar_index - sExpBar >= 3
+            sPhase := INV
+
+plotshape(showBuy and buySignal, title="MMBM Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="MMBM")
+plotshape(showSell and sellSignal, title="MMSM Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="MMSM")
+
+if showLevels and buySignal
+    line.new(bar_index, buyEntry, bar_index + 8, buyEntry, color=color.teal, width=1)
+    line.new(bar_index, buySL, bar_index + 8, buySL, color=color.red, width=1, style=line.style_dotted)
+    line.new(bar_index, buyTP, bar_index + 8, buyTP, color=color.green, width=1, style=line.style_dotted)
+    label.new(bar_index, buyEntry, "Buy " + str.tostring(buyEntry, format.mintick), style=label.style_label_up, color=color.new(color.teal, 70), textcolor=color.white, size=size.tiny)
+
+if showLevels and sellSignal
+    line.new(bar_index, sellEntry, bar_index + 8, sellEntry, color=color.red, width=1)
+    line.new(bar_index, sellSL, bar_index + 8, sellSL, color=color.red, width=1, style=line.style_dotted)
+    line.new(bar_index, sellTP, bar_index + 8, sellTP, color=color.green, width=1, style=line.style_dotted)
+    label.new(bar_index, sellEntry, "Sell " + str.tostring(sellEntry, format.mintick), style=label.style_label_down, color=color.new(color.red, 70), textcolor=color.white, size=size.tiny)
+
+alertcondition(buySignal, "MMBM Entry", "MMXM Buy Model entry")
+alertcondition(sellSignal, "MMSM Entry", "MMXM Sell Model entry")

@@ -7,11 +7,26 @@ indicator("MMXM 進場偵測器", overlay=true, max_labels_count=500, max_lines_
 // 時區無關（只看 OHLC）。禁止在函式內改全域變數（CE10088）。
 
 // ===== ICT 進場模型 =====
-string entryModel = input.string("ERT交易系統", "進場模型", options=["MMXM第四階段", "ERT交易系統", "PO3派發進場"], group="ICT進場模型", tooltip="PO3=Power of Three（累積→操控→派發），進場偏在派發階段。ERT=HTF+MMXM。MMXM=僅本週期第四階段。")
+string entryModel = input.string("ICT演算法", "進場模型", options=["MMXM第四階段", "ERT交易系統", "PO3派發進場", "ICT演算法"], group="ICT進場模型", tooltip="ICT演算法=Killzone時間+HTF+PO3+DOL+MMXM合流。PO3=派發進場。ERT=HTF+MMXM。")
 string entryFill  = input.string("中點CE", "進場參考價", options=["中點CE", "近端", "OTE62"], group="ICT進場模型", tooltip="中點CE=FVG 50%；近端=先碰到的FVG邊界；OTE62=位移腿 62% 回撤（若落在FVG內優先，否則用中點）")
 string entryTrigger = input.string("收K確認進場", "進場確認方式", options=["觸價可進場", "收K確認進場", "收K進入失衡區"], group="ICT進場模型", tooltip="觸價可進場=影線碰到即可（偏限價）；收K確認進場=碰到後收盤回到進場側；收K進入失衡區=收盤落入FVG內才算")
 bool   requireMss = input.bool(true, "需要結構突破MSS（收破累積區間）", group="ICT進場模型")
 bool   requireBullBearClose = input.bool(true, "收K確認時需同向收盤（多收陽/空收陰）", group="ICT進場模型")
+
+// ===== ICT 演算法（IPDA）=====
+bool   useAlgo = input.bool(true, "啟用ICT演算法合流", group="ICT演算法", tooltip="時間Killzone + HTF偏向 + PO3階段 + DOL方向 合流計分")
+string algoTz = input.string("America/New_York", "Killzone時區", options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Taipei", "UTC"], group="ICT演算法")
+bool   useLondonKz = input.bool(true, "倫敦Killzone 02–05", group="ICT演算法")
+bool   useNyKz = input.bool(true, "紐約Killzone 08–11", group="ICT演算法")
+bool   useSilverBullet = input.bool(true, "Silver Bullet 10–11", group="ICT演算法")
+bool   algoRequireKz = input.bool(true, "演算法進場需在Killzone內", group="ICT演算法")
+bool   algoRequirePo3Dist = input.bool(true, "演算法進場需PO3派發同向", group="ICT演算法")
+bool   algoRequireHtf = input.bool(true, "演算法進場需HTF同向", group="ICT演算法")
+bool   algoRequireDol = input.bool(true, "演算法進場需DOL同向", group="ICT演算法")
+int    algoMinScore = input.int(3, "最低合流分數", minval=1, maxval=5, group="ICT演算法", tooltip="時間/HTF/PO3/DOL/結構 各1分")
+bool   useIpda = input.bool(true, "啟用IPDA 20/40/60日區間", group="ICT演算法")
+bool   showIpdaLines = input.bool(false, "顯示IPDA高低線（可選）", group="ICT演算法")
+bool   showKzBg = input.bool(false, "Killzone背景提示（可選）", group="ICT演算法")
 
 // ===== PO3 Power of Three（AMD）=====
 bool   usePo3 = input.bool(true, "啟用PO3（AMD）判別", group="PO3 Power of Three", tooltip="Accumulation累積 → Manipulation操控(Judas) → Distribution派發")
@@ -75,8 +90,10 @@ color sellRewardCol = input.color(color.new(#26a69a, 80), "作空獲利色帶", 
 
 bool isErtMode = entryModel == "ERT交易系統"
 bool isPo3Mode = entryModel == "PO3派發進場"
-bool htfFilterOn = useHtfFilter or (isErtMode and ertRequireHtf) or isPo3Mode
-bool po3FilterOn = usePo3 and (po3Filter or isPo3Mode)
+bool isAlgoMode = entryModel == "ICT演算法"
+bool htfFilterOn = useHtfFilter or (isErtMode and ertRequireHtf) or isPo3Mode or (isAlgoMode and algoRequireHtf)
+bool po3FilterOn = usePo3 and (po3Filter or isPo3Mode or (isAlgoMode and algoRequirePo3Dist))
+bool algoFilterOn = useAlgo and isAlgoMode
 
 float atrVal = ta.atr(atrPeriod)
 
@@ -387,6 +404,67 @@ f_po3Allows(bool isBuy) =>
     else
         isBuy ? po3Dir > 0 : po3Dir < 0
 
+// ----- ICT 演算法：Killzone時間 + IPDA區間 + 合流計分 -----
+int hEt = hour(time, algoTz)
+bool kzLondon = useLondonKz and hEt >= 2 and hEt < 5
+bool kzNy = useNyKz and hEt >= 8 and hEt < 11
+bool kzSb = useSilverBullet and hEt >= 10 and hEt < 11
+bool inKillzone = kzLondon or kzNy or kzSb
+
+f_kzName() =>
+    kzSb ? "Silver Bullet" : kzNy ? "紐約KZ" : kzLondon ? "倫敦KZ" : "非Killzone"
+
+// IPDA 20/40/60 日高低（用日線，取前一日完成值避免lookahead）
+f_ipdaHL(int n) =>
+    [ta.highest(high, n)[1], ta.lowest(low, n)[1]]
+
+[ipda20H, ipda20L] = request.security(syminfo.tickerid, "D", f_ipdaHL(20), barmerge.gaps_off, barmerge.lookahead_off)
+[ipda40H, ipda40L] = request.security(syminfo.tickerid, "D", f_ipdaHL(40), barmerge.gaps_off, barmerge.lookahead_off)
+[ipda60H, ipda60L] = request.security(syminfo.tickerid, "D", f_ipdaHL(60), barmerge.gaps_off, barmerge.lookahead_off)
+
+float ipdaNearHi = useIpda ? math.min(nz(ipda20H, 1e10), math.min(nz(ipda40H, 1e10), nz(ipda60H, 1e10))) : float(na)
+float ipdaNearLo = useIpda ? math.max(nz(ipda20L, -1e10), math.max(nz(ipda40L, -1e10), nz(ipda60L, -1e10))) : float(na)
+bool nearIpdaHi = useIpda and not na(ipdaNearHi) and ipdaNearHi < 1e10 and high >= ipdaNearHi
+bool nearIpdaLo = useIpda and not na(ipdaNearLo) and ipdaNearLo > -1e10 and low <= ipdaNearLo
+
+f_algoScore(bool isBuy) =>
+    int sc = 0
+    if inKillzone
+        sc += 1
+    if f_htfAllows(isBuy)
+        sc += 1
+    if usePo3 and po3Phase == PO3_DIST and ((isBuy and po3Dir > 0) or (not isBuy and po3Dir < 0))
+        sc += 1
+    if useErlIrl and ((isBuy and dolDir > 0) or (not isBuy and dolDir < 0))
+        sc += 1
+    // 結構分：有累積掃蕩或IPDA觸及
+    bool structOk = (isBuy ? (bPhase == WAIT or bPhase == ENT or nearIpdaLo) : (sPhase == WAIT or sPhase == ENT or nearIpdaHi))
+    if structOk
+        sc += 1
+    sc
+
+f_algoPass(bool isBuy) =>
+    if not useAlgo or not algoFilterOn
+        true
+    else
+        bool tOk = not algoRequireKz or inKillzone
+        bool hOk = not algoRequireHtf or f_htfAllows(isBuy)
+        bool pOk = not algoRequirePo3Dist or (usePo3 and po3Phase == PO3_DIST and ((isBuy and po3Dir > 0) or (not isBuy and po3Dir < 0)))
+        bool dOk = not algoRequireDol or (useErlIrl and ((isBuy and dolDir > 0) or (not isBuy and dolDir < 0)))
+        bool scoreOk = f_algoScore(isBuy) >= algoMinScore
+        tOk and hOk and pOk and dOk and scoreOk
+
+f_algoStatus() =>
+    if not useAlgo
+        "關閉"
+    else
+        int sb = f_algoScore(true)
+        int ss = f_algoScore(false)
+        int best = math.max(sb, ss)
+        string side = sb > ss ? "偏多" : ss > sb ? "偏空" : "中性"
+        string gate = algoFilterOn ? (best >= algoMinScore ? "通過" : "等待") : "監控"
+        gate + " " + side + " " + str.tostring(best) + "/" + str.tostring(algoMinScore) + " · " + f_kzName()
+
 f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
     float proximal = isBuy ? bot : top
     float mid = (top + bot) * 0.5
@@ -483,7 +561,7 @@ float candHi = ta.highest(high, lookback)
 float candLo = ta.lowest(low, lookback)
 bool candTight = not na(atrVal) and atrVal > 0.0 and not na(candHi) and not na(candLo) and (candHi - candLo) <= maxRangeAtrMult * atrVal and (candHi - candLo) > 0.0
 
-bool runModel = entryModel == "MMXM第四階段" or entryModel == "ERT交易系統" or entryModel == "PO3派發進場"
+bool runModel = entryModel == "MMXM第四階段" or entryModel == "ERT交易系統" or entryModel == "PO3派發進場" or entryModel == "ICT演算法"
 
 if bar_index >= math.max(lookback, atrPeriod) and runModel
     // ===================== BUY =====================
@@ -613,7 +691,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close < bFvgBot
         if timedOut or stopped or fvgBroken
             bPhase := INV
-        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true) and f_dolAllows(true) and f_po3Allows(true)
+        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true) and f_dolAllows(true) and f_po3Allows(true) and f_algoPass(true)
             buySignal := true
             buyRR := f_registerSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartBar, bFvgBar, entryTrigger)
             bPhase := ENT
@@ -745,7 +823,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close > sFvgTop
         if timedOut or stopped or fvgBroken
             sPhase := INV
-        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false) and f_dolAllows(false) and f_po3Allows(false)
+        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false) and f_dolAllows(false) and f_po3Allows(false) and f_algoPass(false)
             sellSignal := true
             sellRR := f_registerSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             sPhase := ENT

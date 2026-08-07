@@ -15,6 +15,7 @@ class ModelPhase(str, Enum):
     ACCUMULATION = "accumulation"
     MANIPULATION = "manipulation"
     EXPANSION = "expansion"
+    WAIT = "wait"
     ENTRY = "entry"
     COMPLETE = "complete"
     INVALIDATED = "invalidated"
@@ -58,10 +59,14 @@ class ModelState:
     side: ModelSide
     phase: ModelPhase = ModelPhase.IDLE
     accumulation: Optional[AccumulationRange] = None
+    accumulation_count: int = 0
     manipulation_index: Optional[int] = None
     manipulation_extreme: Optional[float] = None
     expansion_index: Optional[int] = None
     fvg: Optional[FairValueGap] = None
+    planned_entry: Optional[float] = None
+    planned_stop: Optional[float] = None
+    planned_tp: Optional[float] = None
     notes: list[str] = field(default_factory=list)
 
 

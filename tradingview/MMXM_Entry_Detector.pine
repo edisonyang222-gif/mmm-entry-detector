@@ -1,18 +1,23 @@
 //@version=6
 indicator("MMXM Entry Detector", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
-// ICT Market Maker Model entry detector
-// Timezone-independent: uses only OHLC bars (works on any chart timezone / session setting)
+// ICT Market Maker Model — more conservative detection
+// Timezone-independent (OHLC only). Entry waits for Phase-4 FVG retrace.
 
 int   lookback        = input.int(20, "Accumulation Lookback", minval=5, group="Detection")
+int   minAccBars      = input.int(5, "Min Bars In Accumulation", minval=2, group="Detection")
 int   atrPeriod       = input.int(14, "ATR Period", minval=1, group="Detection")
-float maxRangeAtrMult = input.float(3.5, "Max Range ATR Mult", minval=0.1, step=0.1, group="Detection")
-float manipAtrMult    = input.float(0.3, "Manipulation ATR Mult", minval=0.0, step=0.05, group="Detection")
-float dispBodyRatio   = input.float(0.65, "Displacement Body Ratio", minval=0.1, maxval=1.0, step=0.05, group="Detection")
-float dispAtrMult     = input.float(0.8, "Displacement ATR Mult", minval=0.1, step=0.1, group="Detection")
-float minRR           = input.float(1.5, "Min Risk/Reward", minval=0.1, step=0.1, group="Detection")
+float maxRangeAtrMult = input.float(2.5, "Max Range ATR Mult", minval=0.5, step=0.1, group="Detection")
+float manipAtrMult    = input.float(0.25, "Min Sweep Beyond Range (ATR)", minval=0.0, step=0.05, group="Detection")
+float minSweepOfRange = input.float(0.15, "Min Sweep / Range Width", minval=0.0, step=0.05, group="Detection")
+float dispBodyRatio   = input.float(0.55, "Displacement Body Ratio", minval=0.1, maxval=1.0, step=0.05, group="Detection")
+float dispAtrMult     = input.float(0.9, "Displacement ATR Mult", minval=0.1, step=0.1, group="Detection")
+float minRR           = input.float(2.0, "Min Risk/Reward", minval=0.5, step=0.1, group="Detection")
 float stopBufAtrMult  = input.float(0.05, "Stop Buffer ATR Mult", minval=0.0, step=0.01, group="Detection")
-string entryFill      = input.string("midpoint", "Entry Fill", options=["midpoint", "proximal", "distal"], group="Detection")
+string entryFill      = input.string("midpoint", "Entry Fill (CE)", options=["midpoint", "proximal"], group="Detection")
+int   maxWaitBars     = input.int(20, "Max Bars Wait For Retrace", minval=3, group="Detection")
+bool  requireCloseBack= input.bool(true, "Require Close Back Inside FVG Side", group="Detection")
+bool  requireMss      = input.bool(true, "Require MSS (close through range)", group="Detection")
 
 bool  showBuy         = input.bool(true, "Show Buy Model (MMBM)", group="Display")
 bool  showSell        = input.bool(true, "Show Sell Model (MMSM)", group="Display")
@@ -20,30 +25,38 @@ bool  showRrBoxes     = input.bool(true, "Show Risk/Reward Boxes", group="Displa
 bool  showLevelLines  = input.bool(true, "Show Entry / SL / TP Lines", group="Display")
 bool  showFvgBox      = input.bool(true, "Show FVG Box", group="Display")
 bool  showAccBox      = input.bool(true, "Show Accumulation Box", group="Display")
+bool  showPending     = input.bool(true, "Show Pending Setup (waiting tap)", group="Display")
 bool  showMarkers     = input.bool(true, "Show Entry Markers", group="Display")
 bool  showInfoTable   = input.bool(true, "Show Info Table", group="Display")
 int   boxBars         = input.int(25, "Box / Line Width (bars)", minval=5, maxval=200, group="Display")
 
-color buyRiskCol   = input.color(color.new(#ef5350, 75), "Buy Risk Box", group="Colors")
-color buyRewardCol = input.color(color.new(#26a69a, 75), "Buy Reward Box", group="Colors")
-color sellRiskCol  = input.color(color.new(#ef5350, 75), "Sell Risk Box", group="Colors")
-color sellRewardCol= input.color(color.new(#26a69a, 75), "Sell Reward Box", group="Colors")
-color fvgCol       = input.color(color.new(#42a5f5, 80), "FVG Box", group="Colors")
-color accCol       = input.color(color.new(#ab47bc, 88), "Accumulation Box", group="Colors")
+color buyRiskCol    = input.color(color.new(#ef5350, 75), "Buy Risk Box", group="Colors")
+color buyRewardCol  = input.color(color.new(#26a69a, 75), "Buy Reward Box", group="Colors")
+color sellRiskCol   = input.color(color.new(#ef5350, 75), "Sell Risk Box", group="Colors")
+color sellRewardCol = input.color(color.new(#26a69a, 75), "Sell Reward Box", group="Colors")
+color fvgCol        = input.color(color.new(#42a5f5, 80), "FVG Box", group="Colors")
+color accCol        = input.color(color.new(#ab47bc, 88), "Accumulation Box", group="Colors")
+color pendingCol    = input.color(color.new(#ffca28, 85), "Pending Box", group="Colors")
 
-float atrVal    = ta.atr(atrPeriod)
-float rangeHigh = ta.highest(high, lookback)
-float rangeLow  = ta.lowest(low, lookback)
+float atrVal = ta.atr(atrPeriod)
 
 int IDLE = 0
 int ACC  = 1
 int MAN  = 2
 int EXP  = 3
-int ENT  = 4
-int INV  = 5
+int WAIT = 4
+int ENT  = 5
+int INV  = 6
 
 f_phaseName(int p) =>
-    p == ACC ? "Accumulation" : p == MAN ? "Manipulation" : p == EXP ? "Expansion" : p == ENT ? "Entry" : p == INV ? "Invalidated" : "Idle"
+    switch p
+        ACC => "Accumulation"
+        MAN => "Manipulation"
+        EXP => "Expansion"
+        WAIT => "Wait Retrace"
+        ENT => "Entry"
+        INV => "Invalidated"
+        => "Idle"
 
 f_isDisp(bool bull) =>
     float rng = high - low
@@ -51,28 +64,41 @@ f_isDisp(bool bull) =>
     bool ok = rng > 0.0 and not na(atrVal) and atrVal > 0.0 and body / rng >= dispBodyRatio and rng >= dispAtrMult * atrVal
     ok and (bull ? close > open : close < open)
 
-f_fvgTop(bool bull) =>
-    float result = bull ? low : low[2]
-    result
+f_hasBullFvg() =>
+    low > high[2]
 
-f_fvgBot(bool bull) =>
-    float result = bull ? high[2] : high
-    result
+f_hasBearFvg() =>
+    high < low[2]
 
-f_hasFvg(bool bull) =>
-    bull ? low > high[2] : high < low[2]
+f_bullFvgTop() =>
+    low
 
-f_entryFromFvg(bool bull, float top, float bot) =>
-    float proximal = bull ? bot : top
-    float distal   = bull ? top : bot
-    float mid      = (top + bot) * 0.5
-    float result = entryFill == "proximal" ? proximal : entryFill == "distal" ? distal : mid
-    result
+f_bullFvgBot() =>
+    high[2]
+
+f_bearFvgTop() =>
+    low[2]
+
+f_bearFvgBot() =>
+    high
+
+f_entryLevel(bool isBuy, float top, float bot) =>
+    float proximal = isBuy ? bot : top
+    float mid = (top + bot) * 0.5
+    entryFill == "proximal" ? proximal : mid
 
 f_px(float v) =>
     str.tostring(v, format.mintick)
 
-f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar) =>
+f_calcTp(bool isBuy, float accHi, float accLo, float manip) =>
+    if isBuy
+        float depth = accHi - manip
+        math.max(accHi + depth, accHi + (accHi - accLo))
+    else
+        float depth = manip - accLo
+        math.min(accLo - depth, accLo - (accHi - accLo))
+
+f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar, int fvgBar) =>
     int x1 = bar_index
     int x2 = bar_index + boxBars
     float risk = math.abs(entry - sl)
@@ -83,16 +109,14 @@ f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvg
     color rewC = isBuy ? buyRewardCol : sellRewardCol
     color entryC = isBuy ? color.teal : color.orange
 
-    // Accumulation context
     if showAccBox and not na(accHi) and not na(accLo)
-        int ax1 = math.max(accStartBar, bar_index - lookback * 2)
+        int ax1 = math.max(accStartBar, bar_index - lookback * 3)
         box.new(ax1, accHi, x1, accLo, bgcolor=accCol, border_color=color.new(#ab47bc, 40), border_width=1, text="ACC", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
 
-    // FVG zone
     if showFvgBox and not na(fvgTop) and not na(fvgBot)
-        box.new(x1 - 2, fvgTop, x2, fvgBot, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
+        int fx1 = math.max(fvgBar - 1, x1 - 10)
+        box.new(fx1, fvgTop, x2, fvgBot, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
 
-    // Risk / Reward boxes
     if showRrBoxes
         if isBuy
             box.new(x1, entry, x2, sl, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="RISK", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
@@ -101,257 +125,325 @@ f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvg
             box.new(x1, sl, x2, entry, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="RISK", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
             box.new(x1, entry, x2, tp, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="REWARD", text_color=color.new(#004d40, 0), text_size=size.tiny)
 
-    // Level lines
     if showLevelLines
         line.new(x1, entry, x2, entry, color=entryC, width=2)
         line.new(x1, sl, x2, sl, color=color.red, width=2, style=line.style_dashed)
         line.new(x1, tp, x2, tp, color=color.lime, width=2, style=line.style_dashed)
-
-        // End caps with price tags
-        label.new(x2, entry, "ENTRY " + f_px(entry), style=isBuy ? label.style_label_left : label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
+        label.new(x2, entry, "ENTRY " + f_px(entry), style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
         label.new(x2, sl, "SL " + f_px(sl), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
         label.new(x2, tp, "TP " + f_px(tp), style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
 
-    // Summary label at signal bar
-    string body = sideTxt + "\n" + "Entry " + f_px(entry) + "\n" + "SL " + f_px(sl) + "\n" + "TP " + f_px(tp) + "\n" + "R:R 1:" + str.tostring(rr, "#.##") + "\n" + "Risk " + f_px(risk) + " / Reward " + f_px(reward)
-    label.new(x1, isBuy ? sl : sl, body, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
-
+    string body = sideTxt + "\nEntry " + f_px(entry) + "\nSL " + f_px(sl) + "\nTP " + f_px(tp) + "\nR:R 1:" + str.tostring(rr, "#.##") + "\nPhase-4 retrace"
+    label.new(x1, sl, body, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
     rr
 
-// Buy state
+// ---- Buy state ----
 var int   bPhase = IDLE
 var float bAccHi = float(na)
 var float bAccLo = float(na)
 var int   bAccStart = 0
+var int   bAccCount = 0
 var float bManip = float(na)
 var int   bExpBar = 0
+var int   bFvgBar = 0
 var float bFvgTop = float(na)
 var float bFvgBot = float(na)
+var float bEntry = float(na)
+var float bSL = float(na)
+var float bTP = float(na)
+var box   bPendingBox = na
 
-// Sell state
+// ---- Sell state ----
 var int   sPhase = IDLE
 var float sAccHi = float(na)
 var float sAccLo = float(na)
 var int   sAccStart = 0
+var int   sAccCount = 0
 var float sManip = float(na)
 var int   sExpBar = 0
+var int   sFvgBar = 0
 var float sFvgTop = float(na)
 var float sFvgBot = float(na)
+var float sEntry = float(na)
+var float sSL = float(na)
+var float sTP = float(na)
+var box   sPendingBox = na
 
 var bool  buySignal = false
 var bool  sellSignal = false
-var float buyEntry = float(na)
-var float buySL = float(na)
-var float buyTP = float(na)
 var float buyRR = float(na)
-var float sellEntry = float(na)
-var float sellSL = float(na)
-var float sellTP = float(na)
 var float sellRR = float(na)
 
 buySignal := false
 sellSignal := false
-buyEntry := float(na)
-buySL := float(na)
-buyTP := float(na)
-buyRR := float(na)
-sellEntry := float(na)
-sellSL := float(na)
-sellTP := float(na)
-sellRR := float(na)
 
-bool isTight = not na(atrVal) and atrVal > 0.0 and not na(rangeHigh) and not na(rangeLow) and (rangeHigh - rangeLow) <= maxRangeAtrMult * atrVal
+f_resetBuy() =>
+    bPhase := IDLE
+    bAccHi := float(na)
+    bAccLo := float(na)
+    bAccCount := 0
+    bManip := float(na)
+    bExpBar := 0
+    bFvgBar := 0
+    bFvgTop := float(na)
+    bFvgBot := float(na)
+    bEntry := float(na)
+    bSL := float(na)
+    bTP := float(na)
+    if not na(bPendingBox)
+        box.delete(bPendingBox)
+        bPendingBox := na
 
-// -------- BUY MODEL --------
+f_resetSell() =>
+    sPhase := IDLE
+    sAccHi := float(na)
+    sAccLo := float(na)
+    sAccCount := 0
+    sManip := float(na)
+    sExpBar := 0
+    sFvgBar := 0
+    sFvgTop := float(na)
+    sFvgBot := float(na)
+    sEntry := float(na)
+    sSL := float(na)
+    sTP := float(na)
+    if not na(sPendingBox)
+        box.delete(sPendingBox)
+        sPendingBox := na
+
+f_updatePending(box pendingBox, bool isBuy, float top, float bot, float entry, float sl, float tp) =>
+    box out = pendingBox
+    if showPending and not na(top) and not na(bot)
+        if na(out)
+            out := box.new(bar_index, top, bar_index + 1, bot, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=isBuy ? "WAIT BUY" : "WAIT SELL", text_size=size.tiny, text_color=color.new(#f57f17, 0))
+        else
+            box.set_right(out, bar_index + 1)
+            box.set_top(out, top)
+            box.set_bottom(out, bot)
+    out
+
+// Rolling candidate range ending at previous closed structure (current bar included for tightness check)
+float candHi = ta.highest(high, lookback)
+float candLo = ta.lowest(low, lookback)
+bool candTight = not na(atrVal) and atrVal > 0.0 and not na(candHi) and not na(candLo) and (candHi - candLo) <= maxRangeAtrMult * atrVal and (candHi - candLo) > 0.0
+
 if bar_index >= math.max(lookback, atrPeriod)
+    // ===================== BUY =====================
     if bPhase == ENT or bPhase == INV
-        bPhase := IDLE
-        bAccHi := float(na)
-        bAccLo := float(na)
-        bManip := float(na)
-        bExpBar := 0
-        bFvgTop := float(na)
-        bFvgBot := float(na)
-
-    float bFrozenHi = bAccHi
-    float bFrozenLo = bAccLo
-    int   bFrozenStart = bAccStart
+        f_resetBuy()
 
     if bPhase == IDLE or bPhase == ACC
-        if bPhase == ACC and not na(bFrozenLo) and low < bFrozenLo - manipAtrMult * atrVal
-            bPhase := MAN
-            bManip := low
-            bAccHi := bFrozenHi
-            bAccLo := bFrozenLo
-            bAccStart := bFrozenStart
-        else if isTight
-            bPhase := ACC
-            bAccHi := rangeHigh
-            bAccLo := rangeLow
-            if na(bFrozenLo)
+        // Freeze range once we have enough tight bars; do not keep expanding with sweeps
+        if bPhase == ACC and bAccCount >= minAccBars and not na(bAccLo)
+            float sweepDepth = bAccLo - low
+            float minSweep = math.max(manipAtrMult * atrVal, minSweepOfRange * (bAccHi - bAccLo))
+            if sweepDepth >= minSweep
+                bPhase := MAN
+                bManip := low
+            else if candTight
+                // keep frozen box; only refresh if still consolidating without sweep
+                bAccCount := bAccCount + 1
+            else
+                f_resetBuy()
+        else if candTight
+            if bPhase == IDLE or na(bAccLo)
+                bPhase := ACC
+                bAccHi := candHi
+                bAccLo := candLo
                 bAccStart := bar_index - lookback + 1
+                bAccCount := lookback
+            else
+                // lock the tighter early range; only shrink updates before freeze complete
+                bAccHi := math.min(bAccHi, candHi)
+                bAccLo := math.max(bAccLo, candLo)
+                // if shrink broke ordering, reset from candidate
+                if bAccHi <= bAccLo
+                    bAccHi := candHi
+                    bAccLo := candLo
+                bAccCount := bAccCount + 1
         else
-            bPhase := IDLE
-            bAccHi := float(na)
-            bAccLo := float(na)
+            f_resetBuy()
+
     else if bPhase == MAN
-        if not na(bManip) and low < bManip
+        if low < bManip
             bManip := low
-        bool bullDisp = f_isDisp(true) and not na(bAccHi) and close > bAccHi
+        bool mssOk = not requireMss or close > bAccHi
+        bool bullDisp = f_isDisp(true) and mssOk
         if bullDisp
             bPhase := EXP
             bExpBar := bar_index
-            if f_hasFvg(true)
-                bFvgTop := f_fvgTop(true)
-                bFvgBot := f_fvgBot(true)
-        else if not na(bAccLo) and close < bAccLo - manipAtrMult * atrVal * 3.0
+            if f_hasBullFvg()
+                bFvgTop := f_bullFvgTop()
+                bFvgBot := f_bullFvgBot()
+                bFvgBar := bar_index
+        else if close < bAccLo - math.max(manipAtrMult * atrVal, bAccHi - bAccLo) * 1.5
             bPhase := INV
-    else if bPhase == EXP
-        if na(bFvgTop) and f_hasFvg(true)
-            bFvgTop := f_fvgTop(true)
-            bFvgBot := f_fvgBot(true)
-        if not na(bFvgTop) and not na(bFvgBot) and not na(bManip) and not na(bAccHi) and not na(bAccLo)
-            float e1 = f_entryFromFvg(true, bFvgTop, bFvgBot)
-            float e2 = bFvgBot
-            float buf = stopBufAtrMult * atrVal
-            float sl = bManip - buf
-            float depth = bAccHi - bManip
-            float tp = math.max(bAccHi + depth, bAccHi + (bAccHi - bAccLo))
-            float rr1 = (e1 - sl) > 0.0 ? (tp - e1) / (e1 - sl) : 0.0
-            float rr2 = (e2 - sl) > 0.0 ? (tp - e2) / (e2 - sl) : 0.0
-            bool fired = false
-            float useEntry = float(na)
-            float useSl = float(na)
-            float useTp = float(na)
-            if rr1 >= minRR
-                fired := true
-                useEntry := e1
-                useSl := sl
-                useTp := tp
-            else if rr2 >= minRR
-                fired := true
-                useEntry := e2
-                useSl := sl
-                useTp := tp
 
-            if fired and showBuy
-                buySignal := true
-                buyEntry := useEntry
-                buySL := useSl
-                buyTP := useTp
-                buyRR := f_drawSetup(true, useEntry, useSl, useTp, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStart)
-                bPhase := ENT
+    else if bPhase == EXP
+        if na(bFvgTop) and f_hasBullFvg()
+            bFvgTop := f_bullFvgTop()
+            bFvgBot := f_bullFvgBot()
+            bFvgBar := bar_index
+        if not na(bFvgTop) and not na(bFvgBot)
+            float entry = f_entryLevel(true, bFvgTop, bFvgBot)
+            float sl = bManip - stopBufAtrMult * atrVal
+            float tp = f_calcTp(true, bAccHi, bAccLo, bManip)
+            float risk = entry - sl
+            float reward = tp - entry
+            float rr = risk > 0.0 ? reward / risk : 0.0
+            if risk > 0.0 and reward > 0.0 and rr >= minRR
+                bEntry := entry
+                bSL := sl
+                bTP := tp
+                bPhase := WAIT
+                bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, entry, sl, tp)
             else
                 bPhase := INV
         else if bar_index - bExpBar >= 3
             bPhase := INV
 
-// -------- SELL MODEL --------
-if bar_index >= math.max(lookback, atrPeriod)
-    if sPhase == ENT or sPhase == INV
-        sPhase := IDLE
-        sAccHi := float(na)
-        sAccLo := float(na)
-        sManip := float(na)
-        sExpBar := 0
-        sFvgTop := float(na)
-        sFvgBot := float(na)
+    else if bPhase == WAIT
+        bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, bEntry, bSL, bTP)
+        // Invalidate: close below SL, or close fully through distal against model, or timeout
+        bool timedOut = bar_index - bFvgBar >= maxWaitBars
+        bool stopped = close < bSL
+        bool fvgBroken = close < bFvgBot
+        if timedOut or stopped or fvgBroken
+            bPhase := INV
+            if not na(bPendingBox)
+                box.delete(bPendingBox)
+                bPendingBox := na
+        else
+            // Phase-4: wick taps into FVG (and optionally closes back above proximal/CE side)
+            bool tapped = low <= bFvgTop and low >= bFvgBot - (bFvgTop - bFvgBot) * 0.1
+            // also allow tap of CE specifically
+            bool tappedCE = low <= bEntry and high >= bEntry
+            bool tapOk = tapped or tappedCE
+            bool closeOk = not requireCloseBack or close >= bEntry or close >= bFvgBot
+            if tapOk and closeOk and showBuy
+                buySignal := true
+                buyRR := f_drawSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStart, bFvgBar)
+                if not na(bPendingBox)
+                    box.delete(bPendingBox)
+                    bPendingBox := na
+                bPhase := ENT
 
-    float sFrozenHi = sAccHi
-    float sFrozenLo = sAccLo
-    int   sFrozenStart = sAccStart
+    // ===================== SELL =====================
+    if sPhase == ENT or sPhase == INV
+        f_resetSell()
 
     if sPhase == IDLE or sPhase == ACC
-        if sPhase == ACC and not na(sFrozenHi) and high > sFrozenHi + manipAtrMult * atrVal
-            sPhase := MAN
-            sManip := high
-            sAccHi := sFrozenHi
-            sAccLo := sFrozenLo
-            sAccStart := sFrozenStart
-        else if isTight
-            sPhase := ACC
-            sAccHi := rangeHigh
-            sAccLo := rangeLow
-            if na(sFrozenHi)
+        if sPhase == ACC and sAccCount >= minAccBars and not na(sAccHi)
+            float sweepDepth = high - sAccHi
+            float minSweep = math.max(manipAtrMult * atrVal, minSweepOfRange * (sAccHi - sAccLo))
+            if sweepDepth >= minSweep
+                sPhase := MAN
+                sManip := high
+            else if candTight
+                sAccCount := sAccCount + 1
+            else
+                f_resetSell()
+        else if candTight
+            if sPhase == IDLE or na(sAccHi)
+                sPhase := ACC
+                sAccHi := candHi
+                sAccLo := candLo
                 sAccStart := bar_index - lookback + 1
+                sAccCount := lookback
+            else
+                sAccHi := math.min(sAccHi, candHi)
+                sAccLo := math.max(sAccLo, candLo)
+                if sAccHi <= sAccLo
+                    sAccHi := candHi
+                    sAccLo := candLo
+                sAccCount := sAccCount + 1
         else
-            sPhase := IDLE
-            sAccHi := float(na)
-            sAccLo := float(na)
+            f_resetSell()
+
     else if sPhase == MAN
-        if not na(sManip) and high > sManip
+        if high > sManip
             sManip := high
-        bool bearDisp = f_isDisp(false) and not na(sAccLo) and close < sAccLo
+        bool mssOk = not requireMss or close < sAccLo
+        bool bearDisp = f_isDisp(false) and mssOk
         if bearDisp
             sPhase := EXP
             sExpBar := bar_index
-            if f_hasFvg(false)
-                sFvgTop := f_fvgTop(false)
-                sFvgBot := f_fvgBot(false)
-        else if not na(sAccHi) and close > sAccHi + manipAtrMult * atrVal * 3.0
+            if f_hasBearFvg()
+                sFvgTop := f_bearFvgTop()
+                sFvgBot := f_bearFvgBot()
+                sFvgBar := bar_index
+        else if close > sAccHi + math.max(manipAtrMult * atrVal, sAccHi - sAccLo) * 1.5
             sPhase := INV
-    else if sPhase == EXP
-        if na(sFvgTop) and f_hasFvg(false)
-            sFvgTop := f_fvgTop(false)
-            sFvgBot := f_fvgBot(false)
-        if not na(sFvgTop) and not na(sFvgBot) and not na(sManip) and not na(sAccHi) and not na(sAccLo)
-            float e1 = f_entryFromFvg(false, sFvgTop, sFvgBot)
-            float e2 = sFvgTop
-            float buf = stopBufAtrMult * atrVal
-            float sl = sManip + buf
-            float depth = sManip - sAccLo
-            float tp = math.min(sAccLo - depth, sAccLo - (sAccHi - sAccLo))
-            float rr1 = (sl - e1) > 0.0 ? (e1 - tp) / (sl - e1) : 0.0
-            float rr2 = (sl - e2) > 0.0 ? (e2 - tp) / (sl - e2) : 0.0
-            bool fired = false
-            float useEntry = float(na)
-            float useSl = float(na)
-            float useTp = float(na)
-            if rr1 >= minRR
-                fired := true
-                useEntry := e1
-                useSl := sl
-                useTp := tp
-            else if rr2 >= minRR
-                fired := true
-                useEntry := e2
-                useSl := sl
-                useTp := tp
 
-            if fired and showSell
-                sellSignal := true
-                sellEntry := useEntry
-                sellSL := useSl
-                sellTP := useTp
-                sellRR := f_drawSetup(false, useEntry, useSl, useTp, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStart)
-                sPhase := ENT
+    else if sPhase == EXP
+        if na(sFvgTop) and f_hasBearFvg()
+            sFvgTop := f_bearFvgTop()
+            sFvgBot := f_bearFvgBot()
+            sFvgBar := bar_index
+        if not na(sFvgTop) and not na(sFvgBot)
+            float entry = f_entryLevel(false, sFvgTop, sFvgBot)
+            float sl = sManip + stopBufAtrMult * atrVal
+            float tp = f_calcTp(false, sAccHi, sAccLo, sManip)
+            float risk = sl - entry
+            float reward = entry - tp
+            float rr = risk > 0.0 ? reward / risk : 0.0
+            if risk > 0.0 and reward > 0.0 and rr >= minRR
+                sEntry := entry
+                sSL := sl
+                sTP := tp
+                sPhase := WAIT
+                sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, entry, sl, tp)
             else
                 sPhase := INV
         else if bar_index - sExpBar >= 3
             sPhase := INV
 
+    else if sPhase == WAIT
+        sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, sEntry, sSL, sTP)
+        bool timedOut = bar_index - sFvgBar >= maxWaitBars
+        bool stopped = close > sSL
+        bool fvgBroken = close > sFvgTop
+        if timedOut or stopped or fvgBroken
+            sPhase := INV
+            if not na(sPendingBox)
+                box.delete(sPendingBox)
+                sPendingBox := na
+        else
+            bool tapped = high >= sFvgBot and high <= sFvgTop + (sFvgTop - sFvgBot) * 0.1
+            bool tappedCE = high >= sEntry and low <= sEntry
+            bool tapOk = tapped or tappedCE
+            bool closeOk = not requireCloseBack or close <= sEntry or close <= sFvgTop
+            if tapOk and closeOk and showSell
+                sellSignal := true
+                sellRR := f_drawSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStart, sFvgBar)
+                if not na(sPendingBox)
+                    box.delete(sPendingBox)
+                    sPendingBox := na
+                sPhase := ENT
+
 plotshape(showMarkers and showBuy and buySignal, title="MMBM Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="BUY")
 plotshape(showMarkers and showSell and sellSignal, title="MMSM Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="SELL")
 
-// Live info table (timezone-agnostic status)
-var table info = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
+var table info = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
-    table.cell(info, 0, 0, "MMXM", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 0, "Any TZ / TF", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 0, 0, "MMXM v2", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, "Phase-4 tap", text_color=color.aqua, text_size=size.small)
     table.cell(info, 0, 1, "Buy phase", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 1, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
     table.cell(info, 0, 2, "Sell phase", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 2, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
     table.cell(info, 0, 3, "ATR", text_color=color.gray, text_size=size.tiny)
     table.cell(info, 1, 3, not na(atrVal) ? f_px(atrVal) : "-", text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 4, "Range", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 4, not na(rangeHigh) and not na(rangeLow) ? f_px(rangeLow) + " ~ " + f_px(rangeHigh) : "-", text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 5, "Tight?", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 5, isTight ? "YES" : "NO", text_color=isTight ? color.lime : color.red, text_size=size.tiny)
-    table.cell(info, 0, 6, "Last Buy RR", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 6, not na(buyRR) ? "1:" + str.tostring(buyRR, "#.##") : "-", text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 7, "Last Sell RR", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 7, not na(sellRR) ? "1:" + str.tostring(sellRR, "#.##") : "-", text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 4, "Buy wait entry", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 4, bPhase == WAIT and not na(bEntry) ? f_px(bEntry) : "-", text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 5, "Sell wait entry", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 5, sPhase == WAIT and not na(sEntry) ? f_px(sEntry) : "-", text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 6, "Tight now?", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 6, candTight ? "YES" : "NO", text_color=candTight ? color.lime : color.red, text_size=size.tiny)
+    table.cell(info, 0, 7, "Last Buy RR", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 7, not na(buyRR) ? "1:" + str.tostring(buyRR, "#.##") : "-", text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 8, "Last Sell RR", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 8, not na(sellRR) ? "1:" + str.tostring(sellRR, "#.##") : "-", text_color=color.orange, text_size=size.tiny)
 
-alertcondition(buySignal, "MMBM Entry", "MMXM Buy Model entry (timezone independent)")
-alertcondition(sellSignal, "MMSM Entry", "MMXM Sell Model entry (timezone independent)")
+alertcondition(buySignal, "MMBM Entry", "MMXM Buy Phase-4 FVG retrace")
+alertcondition(sellSignal, "MMSM Entry", "MMXM Sell Phase-4 FVG retrace")

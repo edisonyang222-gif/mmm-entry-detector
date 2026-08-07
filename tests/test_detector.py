@@ -55,16 +55,19 @@ def test_detector_finds_synthetic_mmbm():
     from examples.generate_sample import build_mmbm_sample
 
     df = build_mmbm_sample()
-    # Loosen RR for synthetic geometry so the structural path is tested.
     detector = MMXMDetector(
         MMXMConfig(
             accumulation_lookback=20,
+            min_accumulation_bars=5,
             atr_period=14,
             max_range_atr_mult=4.0,
-            manipulation_atr_mult=0.2,
+            manipulation_atr_mult=0.15,
+            min_sweep_of_range=0.05,
             displacement_body_ratio=0.5,
             displacement_atr_mult=0.5,
             min_risk_reward=1.0,
+            max_wait_bars=30,
+            require_close_back=True,
         )
     )
     signals = detector.scan(df)
@@ -75,6 +78,8 @@ def test_detector_finds_synthetic_mmbm():
     assert sig.entry > sig.stop_loss
     assert sig.take_profit > sig.entry
     assert sig.risk_reward >= 1.0
+    # Phase-4: entry should occur on/after the retrace bar, not the first expansion FVG bar.
+    assert sig.bar_index >= 65
 
     frame = signals_to_frame(signals)
     assert "side" in frame.columns

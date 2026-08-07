@@ -10,6 +10,7 @@ from .indicators import atr, detect_fvg_at, is_displacement_candle, rolling_rang
 from .models import (
     AccumulationRange,
     EntrySignal,
+    FairValueGap,
     ModelPhase,
     ModelSide,
     ModelState,
@@ -24,15 +25,19 @@ class MMXMConfig:
     """Tunable parameters for MMXM phase detection."""
 
     accumulation_lookback: int = 20
+    min_accumulation_bars: int = 5
     atr_period: int = 14
-    max_range_atr_mult: float = 3.5
-    manipulation_atr_mult: float = 0.3
-    displacement_body_ratio: float = 0.65
-    displacement_atr_mult: float = 0.8
-    min_risk_reward: float = 1.5
-    entry_fill: str = "midpoint"  # midpoint | proximal | distal
+    max_range_atr_mult: float = 2.5
+    manipulation_atr_mult: float = 0.25
+    min_sweep_of_range: float = 0.15
+    displacement_body_ratio: float = 0.55
+    displacement_atr_mult: float = 0.9
+    min_risk_reward: float = 2.0
+    entry_fill: str = "midpoint"  # midpoint | proximal
     stop_buffer_atr_mult: float = 0.05
     require_close_through_range: bool = True
+    max_wait_bars: int = 20
+    require_close_back: bool = True
 
 
 class MMXMDetector:
@@ -40,10 +45,11 @@ class MMXMDetector:
     Detect ICT Market Maker Buy/Sell Model entries on OHLCV bars.
 
     Phase flow:
-      1. Accumulation — tight range relative to ATR
+      1. Accumulation — tight range held for N bars
       2. Manipulation — SSL (buy) / BSL (sell) liquidity sweep
-      3. Expansion — displacement that closes through the range
-      4. Entry — FVG formed on the displacement leg (Phase-4 style)
+      3. Expansion — displacement + MSS through range + FVG
+      4. Wait — arm entry at FVG CE / proximal
+      5. Entry — Phase-4 retrace tap into FVG
     """
 
     def __init__(self, config: Optional[MMXMConfig] = None) -> None:
@@ -85,6 +91,19 @@ class MMXMDetector:
 
         return signals
 
+    def _reset(self, state: ModelState) -> None:
+        state.phase = ModelPhase.IDLE
+        state.accumulation = None
+        state.accumulation_count = 0
+        state.manipulation_index = None
+        state.manipulation_extreme = None
+        state.expansion_index = None
+        state.fvg = None
+        state.planned_entry = None
+        state.planned_stop = None
+        state.planned_tp = None
+        state.notes.clear()
+
     def _step(
         self,
         *,
@@ -102,58 +121,77 @@ class MMXMDetector:
         open_ = float(row["open"])
         close = float(row["close"])
 
-        # Reset completed / invalidated models so we can hunt the next cycle.
         if state.phase in {ModelPhase.ENTRY, ModelPhase.COMPLETE, ModelPhase.INVALIDATED}:
-            state.phase = ModelPhase.IDLE
-            state.accumulation = None
-            state.manipulation_index = None
-            state.manipulation_extreme = None
-            state.expansion_index = None
-            state.fvg = None
-            state.notes.clear()
+            self._reset(state)
 
         range_width = range_high - range_low
         is_tight = range_width <= cfg.max_range_atr_mult * atr_value
 
-        # Freeze the prior accumulation box before updating with the current bar,
-        # otherwise the sweep candle widens the range and cancels itself.
-        frozen_acc = state.accumulation
-
         if state.phase in {ModelPhase.IDLE, ModelPhase.ACCUMULATION}:
+            frozen = state.accumulation
             if (
                 state.phase == ModelPhase.ACCUMULATION
-                and frozen_acc is not None
-                and self._detect_manipulation(
-                    state.side, high, low, frozen_acc, atr_value
-                )
+                and frozen is not None
+                and state.accumulation_count >= cfg.min_accumulation_bars
             ):
-                state.phase = ModelPhase.MANIPULATION
-                state.manipulation_index = index
-                state.manipulation_extreme = (
-                    low if state.side == ModelSide.BUY else high
+                min_sweep = max(
+                    cfg.manipulation_atr_mult * atr_value,
+                    cfg.min_sweep_of_range * frozen.width,
                 )
-                # Keep the frozen pre-sweep accumulation for later expansion/entry.
-                state.accumulation = frozen_acc
+                swept = (
+                    (frozen.low - low) >= min_sweep
+                    if state.side == ModelSide.BUY
+                    else (high - frozen.high) >= min_sweep
+                )
+                if swept:
+                    state.phase = ModelPhase.MANIPULATION
+                    state.manipulation_index = index
+                    state.manipulation_extreme = low if state.side == ModelSide.BUY else high
+                    return None
+                if is_tight:
+                    state.accumulation_count += 1
+                    return None
+                self._reset(state)
                 return None
 
             if is_tight:
-                state.phase = ModelPhase.ACCUMULATION
-                state.accumulation = AccumulationRange(
-                    start_index=index - cfg.accumulation_lookback + 1,
-                    end_index=index,
-                    high=range_high,
-                    low=range_low,
-                )
+                if state.phase == ModelPhase.IDLE or frozen is None:
+                    state.phase = ModelPhase.ACCUMULATION
+                    state.accumulation = AccumulationRange(
+                        start_index=index - cfg.accumulation_lookback + 1,
+                        end_index=index,
+                        high=range_high,
+                        low=range_low,
+                    )
+                    # The lookback window itself already proved consolidation.
+                    state.accumulation_count = cfg.accumulation_lookback
+                else:
+                    # Keep / slightly tighten frozen box before unlock.
+                    new_high = min(frozen.high, range_high)
+                    new_low = max(frozen.low, range_low)
+                    if new_high > new_low:
+                        state.accumulation = AccumulationRange(
+                            start_index=frozen.start_index,
+                            end_index=index,
+                            high=new_high,
+                            low=new_low,
+                        )
+                    else:
+                        state.accumulation = AccumulationRange(
+                            start_index=index - cfg.accumulation_lookback + 1,
+                            end_index=index,
+                            high=range_high,
+                            low=range_low,
+                        )
+                    state.accumulation_count += 1
             else:
-                state.phase = ModelPhase.IDLE
-                state.accumulation = None
+                self._reset(state)
             return None
 
         assert state.accumulation is not None
         acc = state.accumulation
 
         if state.phase == ModelPhase.MANIPULATION:
-            # Track deeper sweep extreme while waiting for expansion.
             if state.side == ModelSide.BUY:
                 if low < (state.manipulation_extreme or low):
                     state.manipulation_extreme = low
@@ -169,17 +207,14 @@ class MMXMDetector:
                 state.phase = ModelPhase.EXPANSION
                 state.expansion_index = index
                 fvg = detect_fvg_at(frame, index, state.side)
-                if fvg is None:
-                    # Displacement without FVG — still mark expansion; wait one more bar.
-                    state.notes.append("expansion_without_immediate_fvg")
-                    return None
-                state.fvg = fvg
-                return self._build_entry(state, frame, index)
+                if fvg is not None:
+                    state.fvg = fvg
+                return None
 
-            # Invalidation: opposite extreme breaks far beyond accumulation.
-            if state.side == ModelSide.BUY and close < acc.low - cfg.manipulation_atr_mult * atr_value * 3:
+            thr = max(cfg.manipulation_atr_mult * atr_value, acc.width) * 1.5
+            if state.side == ModelSide.BUY and close < acc.low - thr:
                 state.phase = ModelPhase.INVALIDATED
-            elif state.side == ModelSide.SELL and close > acc.high + cfg.manipulation_atr_mult * atr_value * 3:
+            elif state.side == ModelSide.SELL and close > acc.high + thr:
                 state.phase = ModelPhase.INVALIDATED
             return None
 
@@ -188,26 +223,55 @@ class MMXMDetector:
                 fvg = detect_fvg_at(frame, index, state.side)
                 if fvg is not None:
                     state.fvg = fvg
-                    return self._build_entry(state, frame, index)
-                # Give a short window after expansion.
-                if state.expansion_index is not None and index - state.expansion_index >= 3:
+                elif (
+                    state.expansion_index is not None
+                    and index - state.expansion_index >= 3
+                ):
                     state.phase = ModelPhase.INVALIDATED
+                return None
+
+            armed = self._arm_wait(state, atr_value)
+            if not armed:
+                state.phase = ModelPhase.INVALIDATED
+            return None
+
+        if state.phase == ModelPhase.WAIT:
+            assert state.fvg is not None
+            assert state.planned_entry is not None
+            assert state.planned_stop is not None
+            assert state.planned_tp is not None
+
+            fvg_bar = state.fvg.start_index + 1  # approximate formation bar
+            if index - fvg_bar >= cfg.max_wait_bars:
+                state.phase = ModelPhase.INVALIDATED
+                return None
+
+            if state.side == ModelSide.BUY:
+                if close < state.planned_stop or close < state.fvg.bottom:
+                    state.phase = ModelPhase.INVALIDATED
+                    return None
+                tapped = (low <= state.fvg.top and high >= state.fvg.bottom) or (
+                    low <= state.planned_entry <= high
+                )
+                close_ok = (not cfg.require_close_back) or (
+                    close >= state.planned_entry or close >= state.fvg.bottom
+                )
+            else:
+                if close > state.planned_stop or close > state.fvg.top:
+                    state.phase = ModelPhase.INVALIDATED
+                    return None
+                tapped = (high >= state.fvg.bottom and low <= state.fvg.top) or (
+                    low <= state.planned_entry <= high
+                )
+                close_ok = (not cfg.require_close_back) or (
+                    close <= state.planned_entry or close <= state.fvg.top
+                )
+
+            if tapped and close_ok:
+                return self._emit_planned(state, frame, index)
             return None
 
         return None
-
-    def _detect_manipulation(
-        self,
-        side: ModelSide,
-        high: float,
-        low: float,
-        acc: AccumulationRange,
-        atr_value: float,
-    ) -> bool:
-        threshold = self.config.manipulation_atr_mult * atr_value
-        if side == ModelSide.BUY:
-            return low < acc.low - threshold
-        return high > acc.high + threshold
 
     def _detect_expansion(
         self,
@@ -234,18 +298,12 @@ class MMXMDetector:
 
         if not self.config.require_close_through_range:
             return True
+        return close > acc.high if bullish else close < acc.low
 
-        if bullish:
-            return close > acc.high
-        return close < acc.low
-
-    def _entry_price(self, state: ModelState, fill: str) -> float:
-        assert state.fvg is not None
-        if fill == "proximal":
-            return state.fvg.proximal
-        if fill == "distal":
-            return state.fvg.distal
-        return state.fvg.midpoint
+    def _entry_price(self, fvg: FairValueGap, fill: str) -> float:
+        proximal = fvg.proximal
+        mid = fvg.midpoint
+        return proximal if fill == "proximal" else mid
 
     def _targets(
         self,
@@ -253,13 +311,9 @@ class MMXMDetector:
         entry: float,
         atr_value: float,
     ) -> tuple[float, float, float, float]:
-        """Return stop, take_profit, risk, reward for a candidate entry."""
         assert state.accumulation is not None
         assert state.manipulation_extreme is not None
-
-        buffer = 0.0
-        if np.isfinite(atr_value):
-            buffer = self.config.stop_buffer_atr_mult * atr_value
+        buffer = self.config.stop_buffer_atr_mult * atr_value if atr_value > 0 else 0.0
 
         if state.side == ModelSide.BUY:
             stop = state.manipulation_extreme - buffer
@@ -279,48 +333,52 @@ class MMXMDetector:
             reward = entry - take_profit
         return stop, take_profit, risk, reward
 
-    def _build_entry(
+    def _arm_wait(self, state: ModelState, atr_value: float) -> bool:
+        assert state.fvg is not None
+        fill = self.config.entry_fill if self.config.entry_fill in {"midpoint", "proximal"} else "midpoint"
+        entry = self._entry_price(state.fvg, fill)
+        stop, take_profit, risk, reward = self._targets(state, entry, atr_value)
+        if risk <= 0 or reward <= 0:
+            return False
+        rr = reward / risk
+        if rr < self.config.min_risk_reward:
+            # try proximal once
+            if fill != "proximal":
+                entry = self._entry_price(state.fvg, "proximal")
+                stop, take_profit, risk, reward = self._targets(state, entry, atr_value)
+                if risk <= 0 or reward <= 0 or reward / risk < self.config.min_risk_reward:
+                    return False
+            else:
+                return False
+        state.planned_entry = float(entry)
+        state.planned_stop = float(stop)
+        state.planned_tp = float(take_profit)
+        state.phase = ModelPhase.WAIT
+        return True
+
+    def _emit_planned(
         self,
         state: ModelState,
         frame: pd.DataFrame,
         index: int,
-    ) -> Optional[EntrySignal]:
+    ) -> EntrySignal:
         assert state.accumulation is not None
         assert state.manipulation_extreme is not None
         assert state.fvg is not None
+        assert state.planned_entry is not None
+        assert state.planned_stop is not None
+        assert state.planned_tp is not None
 
-        atr_series = atr(frame, self.config.atr_period)
-        atr_value = float(atr_series.iloc[index])
-
-        # Prefer configured fill; fall back to proximal if RR is too low.
-        fill_order = [self.config.entry_fill]
-        if "proximal" not in fill_order:
-            fill_order.append("proximal")
-
-        chosen: tuple[str, float, float, float, float] | None = None
-        for fill in fill_order:
-            entry = self._entry_price(state, fill)
-            stop, take_profit, risk, reward = self._targets(state, entry, atr_value)
-            if risk <= 0 or reward <= 0:
-                continue
-            rr = reward / risk
-            if rr >= self.config.min_risk_reward:
-                chosen = (fill, entry, stop, take_profit, rr)
-                break
-            state.notes.append(f"rr_below_min:{fill}:{rr:.2f}")
-
-        if chosen is None:
-            state.phase = ModelPhase.INVALIDATED
-            return None
-
-        fill, entry, stop, take_profit, rr = chosen
-        if fill != self.config.entry_fill:
-            state.notes.append(f"entry_fill_fallback:{fill}")
+        entry = state.planned_entry
+        stop = state.planned_stop
+        take_profit = state.planned_tp
+        risk = abs(entry - stop)
+        reward = abs(take_profit - entry)
+        rr = reward / risk if risk > 0 else 0.0
 
         ts = None
         if "timestamp" in frame.columns:
-            value = frame.iloc[index]["timestamp"]
-            ts = str(value)
+            ts = str(frame.iloc[index]["timestamp"])
 
         state.phase = ModelPhase.ENTRY
         return EntrySignal(

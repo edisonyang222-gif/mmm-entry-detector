@@ -1,33 +1,49 @@
 //@version=6
-indicator("MMXM Entry Detector", overlay=true, max_labels_count=500, max_lines_count=500)
+indicator("MMXM Entry Detector", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
 // ICT Market Maker Model entry detector
-// Phases: Accumulation -> Manipulation (SSL/BSL) -> Expansion -> FVG Entry
+// Timezone-independent: uses only OHLC bars (works on any chart timezone / session setting)
 
-int   lookback        = input.int(20, "Accumulation Lookback", minval=5)
-int   atrPeriod       = input.int(14, "ATR Period", minval=1)
-float maxRangeAtrMult = input.float(3.5, "Max Range ATR Mult", minval=0.1, step=0.1)
-float manipAtrMult    = input.float(0.3, "Manipulation ATR Mult", minval=0.0, step=0.05)
-float dispBodyRatio   = input.float(0.65, "Displacement Body Ratio", minval=0.1, maxval=1.0, step=0.05)
-float dispAtrMult     = input.float(0.8, "Displacement ATR Mult", minval=0.1, step=0.1)
-float minRR           = input.float(1.5, "Min Risk/Reward", minval=0.1, step=0.1)
-float stopBufAtrMult  = input.float(0.05, "Stop Buffer ATR Mult", minval=0.0, step=0.01)
-string entryFill      = input.string("midpoint", "Entry Fill", options=["midpoint", "proximal", "distal"])
-bool  showBuy         = input.bool(true, "Show Buy Model (MMBM)")
-bool  showSell        = input.bool(true, "Show Sell Model (MMSM)")
-bool  showLevels      = input.bool(true, "Show Entry/SL/TP Lines")
+int   lookback        = input.int(20, "Accumulation Lookback", minval=5, group="Detection")
+int   atrPeriod       = input.int(14, "ATR Period", minval=1, group="Detection")
+float maxRangeAtrMult = input.float(3.5, "Max Range ATR Mult", minval=0.1, step=0.1, group="Detection")
+float manipAtrMult    = input.float(0.3, "Manipulation ATR Mult", minval=0.0, step=0.05, group="Detection")
+float dispBodyRatio   = input.float(0.65, "Displacement Body Ratio", minval=0.1, maxval=1.0, step=0.05, group="Detection")
+float dispAtrMult     = input.float(0.8, "Displacement ATR Mult", minval=0.1, step=0.1, group="Detection")
+float minRR           = input.float(1.5, "Min Risk/Reward", minval=0.1, step=0.1, group="Detection")
+float stopBufAtrMult  = input.float(0.05, "Stop Buffer ATR Mult", minval=0.0, step=0.01, group="Detection")
+string entryFill      = input.string("midpoint", "Entry Fill", options=["midpoint", "proximal", "distal"], group="Detection")
+
+bool  showBuy         = input.bool(true, "Show Buy Model (MMBM)", group="Display")
+bool  showSell        = input.bool(true, "Show Sell Model (MMSM)", group="Display")
+bool  showRrBoxes     = input.bool(true, "Show Risk/Reward Boxes", group="Display")
+bool  showLevelLines  = input.bool(true, "Show Entry / SL / TP Lines", group="Display")
+bool  showFvgBox      = input.bool(true, "Show FVG Box", group="Display")
+bool  showAccBox      = input.bool(true, "Show Accumulation Box", group="Display")
+bool  showMarkers     = input.bool(true, "Show Entry Markers", group="Display")
+bool  showInfoTable   = input.bool(true, "Show Info Table", group="Display")
+int   boxBars         = input.int(25, "Box / Line Width (bars)", minval=5, maxval=200, group="Display")
+
+color buyRiskCol   = input.color(color.new(#ef5350, 75), "Buy Risk Box", group="Colors")
+color buyRewardCol = input.color(color.new(#26a69a, 75), "Buy Reward Box", group="Colors")
+color sellRiskCol  = input.color(color.new(#ef5350, 75), "Sell Risk Box", group="Colors")
+color sellRewardCol= input.color(color.new(#26a69a, 75), "Sell Reward Box", group="Colors")
+color fvgCol       = input.color(color.new(#42a5f5, 80), "FVG Box", group="Colors")
+color accCol       = input.color(color.new(#ab47bc, 88), "Accumulation Box", group="Colors")
 
 float atrVal    = ta.atr(atrPeriod)
 float rangeHigh = ta.highest(high, lookback)
 float rangeLow  = ta.lowest(low, lookback)
 
-// phases
 int IDLE = 0
 int ACC  = 1
 int MAN  = 2
 int EXP  = 3
 int ENT  = 4
 int INV  = 5
+
+f_phaseName(int p) =>
+    p == ACC ? "Accumulation" : p == MAN ? "Manipulation" : p == EXP ? "Expansion" : p == ENT ? "Entry" : p == INV ? "Invalidated" : "Idle"
 
 f_isDisp(bool bull) =>
     float rng = high - low
@@ -53,10 +69,60 @@ f_entryFromFvg(bool bull, float top, float bot) =>
     float result = entryFill == "proximal" ? proximal : entryFill == "distal" ? distal : mid
     result
 
+f_px(float v) =>
+    str.tostring(v, format.mintick)
+
+f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar) =>
+    int x1 = bar_index
+    int x2 = bar_index + boxBars
+    float risk = math.abs(entry - sl)
+    float reward = math.abs(tp - entry)
+    float rr = risk > 0.0 ? reward / risk : 0.0
+    string sideTxt = isBuy ? "MMBM BUY" : "MMSM SELL"
+    color riskC = isBuy ? buyRiskCol : sellRiskCol
+    color rewC = isBuy ? buyRewardCol : sellRewardCol
+    color entryC = isBuy ? color.teal : color.orange
+
+    // Accumulation context
+    if showAccBox and not na(accHi) and not na(accLo)
+        int ax1 = math.max(accStartBar, bar_index - lookback * 2)
+        box.new(ax1, accHi, x1, accLo, bgcolor=accCol, border_color=color.new(#ab47bc, 40), border_width=1, text="ACC", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
+
+    // FVG zone
+    if showFvgBox and not na(fvgTop) and not na(fvgBot)
+        box.new(x1 - 2, fvgTop, x2, fvgBot, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
+
+    // Risk / Reward boxes
+    if showRrBoxes
+        if isBuy
+            box.new(x1, entry, x2, sl, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="RISK", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, tp, x2, entry, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="REWARD", text_color=color.new(#004d40, 0), text_size=size.tiny)
+        else
+            box.new(x1, sl, x2, entry, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text="RISK", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, entry, x2, tp, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text="REWARD", text_color=color.new(#004d40, 0), text_size=size.tiny)
+
+    // Level lines
+    if showLevelLines
+        line.new(x1, entry, x2, entry, color=entryC, width=2)
+        line.new(x1, sl, x2, sl, color=color.red, width=2, style=line.style_dashed)
+        line.new(x1, tp, x2, tp, color=color.lime, width=2, style=line.style_dashed)
+
+        // End caps with price tags
+        label.new(x2, entry, "ENTRY " + f_px(entry), style=isBuy ? label.style_label_left : label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
+        label.new(x2, sl, "SL " + f_px(sl), style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+        label.new(x2, tp, "TP " + f_px(tp), style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+
+    // Summary label at signal bar
+    string body = sideTxt + "\n" + "Entry " + f_px(entry) + "\n" + "SL " + f_px(sl) + "\n" + "TP " + f_px(tp) + "\n" + "R:R 1:" + str.tostring(rr, "#.##") + "\n" + "Risk " + f_px(risk) + " / Reward " + f_px(reward)
+    label.new(x1, isBuy ? sl : sl, body, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
+
+    rr
+
 // Buy state
 var int   bPhase = IDLE
 var float bAccHi = float(na)
 var float bAccLo = float(na)
+var int   bAccStart = 0
 var float bManip = float(na)
 var int   bExpBar = 0
 var float bFvgTop = float(na)
@@ -66,6 +132,7 @@ var float bFvgBot = float(na)
 var int   sPhase = IDLE
 var float sAccHi = float(na)
 var float sAccLo = float(na)
+var int   sAccStart = 0
 var float sManip = float(na)
 var int   sExpBar = 0
 var float sFvgTop = float(na)
@@ -76,18 +143,22 @@ var bool  sellSignal = false
 var float buyEntry = float(na)
 var float buySL = float(na)
 var float buyTP = float(na)
+var float buyRR = float(na)
 var float sellEntry = float(na)
 var float sellSL = float(na)
 var float sellTP = float(na)
+var float sellRR = float(na)
 
 buySignal := false
 sellSignal := false
 buyEntry := float(na)
 buySL := float(na)
 buyTP := float(na)
+buyRR := float(na)
 sellEntry := float(na)
 sellSL := float(na)
 sellTP := float(na)
+sellRR := float(na)
 
 bool isTight = not na(atrVal) and atrVal > 0.0 and not na(rangeHigh) and not na(rangeLow) and (rangeHigh - rangeLow) <= maxRangeAtrMult * atrVal
 
@@ -104,6 +175,7 @@ if bar_index >= math.max(lookback, atrPeriod)
 
     float bFrozenHi = bAccHi
     float bFrozenLo = bAccLo
+    int   bFrozenStart = bAccStart
 
     if bPhase == IDLE or bPhase == ACC
         if bPhase == ACC and not na(bFrozenLo) and low < bFrozenLo - manipAtrMult * atrVal
@@ -111,10 +183,13 @@ if bar_index >= math.max(lookback, atrPeriod)
             bManip := low
             bAccHi := bFrozenHi
             bAccLo := bFrozenLo
+            bAccStart := bFrozenStart
         else if isTight
             bPhase := ACC
             bAccHi := rangeHigh
             bAccLo := rangeLow
+            if na(bFrozenLo)
+                bAccStart := bar_index - lookback + 1
         else
             bPhase := IDLE
             bAccHi := float(na)
@@ -144,17 +219,27 @@ if bar_index >= math.max(lookback, atrPeriod)
             float tp = math.max(bAccHi + depth, bAccHi + (bAccHi - bAccLo))
             float rr1 = (e1 - sl) > 0.0 ? (tp - e1) / (e1 - sl) : 0.0
             float rr2 = (e2 - sl) > 0.0 ? (tp - e2) / (e2 - sl) : 0.0
+            bool fired = false
+            float useEntry = float(na)
+            float useSl = float(na)
+            float useTp = float(na)
             if rr1 >= minRR
-                buySignal := true
-                buyEntry := e1
-                buySL := sl
-                buyTP := tp
-                bPhase := ENT
+                fired := true
+                useEntry := e1
+                useSl := sl
+                useTp := tp
             else if rr2 >= minRR
+                fired := true
+                useEntry := e2
+                useSl := sl
+                useTp := tp
+
+            if fired and showBuy
                 buySignal := true
-                buyEntry := e2
-                buySL := sl
-                buyTP := tp
+                buyEntry := useEntry
+                buySL := useSl
+                buyTP := useTp
+                buyRR := f_drawSetup(true, useEntry, useSl, useTp, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStart)
                 bPhase := ENT
             else
                 bPhase := INV
@@ -174,6 +259,7 @@ if bar_index >= math.max(lookback, atrPeriod)
 
     float sFrozenHi = sAccHi
     float sFrozenLo = sAccLo
+    int   sFrozenStart = sAccStart
 
     if sPhase == IDLE or sPhase == ACC
         if sPhase == ACC and not na(sFrozenHi) and high > sFrozenHi + manipAtrMult * atrVal
@@ -181,10 +267,13 @@ if bar_index >= math.max(lookback, atrPeriod)
             sManip := high
             sAccHi := sFrozenHi
             sAccLo := sFrozenLo
+            sAccStart := sFrozenStart
         else if isTight
             sPhase := ACC
             sAccHi := rangeHigh
             sAccLo := rangeLow
+            if na(sFrozenHi)
+                sAccStart := bar_index - lookback + 1
         else
             sPhase := IDLE
             sAccHi := float(na)
@@ -214,37 +303,55 @@ if bar_index >= math.max(lookback, atrPeriod)
             float tp = math.min(sAccLo - depth, sAccLo - (sAccHi - sAccLo))
             float rr1 = (sl - e1) > 0.0 ? (e1 - tp) / (sl - e1) : 0.0
             float rr2 = (sl - e2) > 0.0 ? (e2 - tp) / (sl - e2) : 0.0
+            bool fired = false
+            float useEntry = float(na)
+            float useSl = float(na)
+            float useTp = float(na)
             if rr1 >= minRR
-                sellSignal := true
-                sellEntry := e1
-                sellSL := sl
-                sellTP := tp
-                sPhase := ENT
+                fired := true
+                useEntry := e1
+                useSl := sl
+                useTp := tp
             else if rr2 >= minRR
+                fired := true
+                useEntry := e2
+                useSl := sl
+                useTp := tp
+
+            if fired and showSell
                 sellSignal := true
-                sellEntry := e2
-                sellSL := sl
-                sellTP := tp
+                sellEntry := useEntry
+                sellSL := useSl
+                sellTP := useTp
+                sellRR := f_drawSetup(false, useEntry, useSl, useTp, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStart)
                 sPhase := ENT
             else
                 sPhase := INV
         else if bar_index - sExpBar >= 3
             sPhase := INV
 
-plotshape(showBuy and buySignal, title="MMBM Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="MMBM")
-plotshape(showSell and sellSignal, title="MMSM Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="MMSM")
+plotshape(showMarkers and showBuy and buySignal, title="MMBM Entry", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="BUY")
+plotshape(showMarkers and showSell and sellSignal, title="MMSM Entry", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.normal, text="SELL")
 
-if showLevels and buySignal and not na(buyEntry) and not na(buySL) and not na(buyTP)
-    line.new(bar_index, buyEntry, bar_index + 8, buyEntry, color=color.teal, width=1)
-    line.new(bar_index, buySL, bar_index + 8, buySL, color=color.red, width=1, style=line.style_dotted)
-    line.new(bar_index, buyTP, bar_index + 8, buyTP, color=color.green, width=1, style=line.style_dotted)
-    label.new(bar_index, buyEntry, "Buy " + str.tostring(buyEntry, format.mintick), style=label.style_label_up, color=color.new(color.teal, 70), textcolor=color.white, size=size.tiny)
+// Live info table (timezone-agnostic status)
+var table info = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 75), border_width=1, border_color=color.gray)
+if showInfoTable and barstate.islast
+    table.cell(info, 0, 0, "MMXM", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 0, "Any TZ / TF", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 0, 1, "Buy phase", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 1, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 2, "Sell phase", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 2, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 3, "ATR", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 3, not na(atrVal) ? f_px(atrVal) : "-", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 4, "Range", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 4, not na(rangeHigh) and not na(rangeLow) ? f_px(rangeLow) + " ~ " + f_px(rangeHigh) : "-", text_color=color.white, text_size=size.tiny)
+    table.cell(info, 0, 5, "Tight?", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 5, isTight ? "YES" : "NO", text_color=isTight ? color.lime : color.red, text_size=size.tiny)
+    table.cell(info, 0, 6, "Last Buy RR", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 6, not na(buyRR) ? "1:" + str.tostring(buyRR, "#.##") : "-", text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 7, "Last Sell RR", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 7, not na(sellRR) ? "1:" + str.tostring(sellRR, "#.##") : "-", text_color=color.orange, text_size=size.tiny)
 
-if showLevels and sellSignal and not na(sellEntry) and not na(sellSL) and not na(sellTP)
-    line.new(bar_index, sellEntry, bar_index + 8, sellEntry, color=color.red, width=1)
-    line.new(bar_index, sellSL, bar_index + 8, sellSL, color=color.red, width=1, style=line.style_dotted)
-    line.new(bar_index, sellTP, bar_index + 8, sellTP, color=color.green, width=1, style=line.style_dotted)
-    label.new(bar_index, sellEntry, "Sell " + str.tostring(sellEntry, format.mintick), style=label.style_label_down, color=color.new(color.red, 70), textcolor=color.white, size=size.tiny)
-
-alertcondition(buySignal, "MMBM Entry", "MMXM Buy Model entry")
-alertcondition(sellSignal, "MMSM Entry", "MMXM Sell Model entry")
+alertcondition(buySignal, "MMBM Entry", "MMXM Buy Model entry (timezone independent)")
+alertcondition(sellSignal, "MMSM Entry", "MMXM Sell Model entry (timezone independent)")

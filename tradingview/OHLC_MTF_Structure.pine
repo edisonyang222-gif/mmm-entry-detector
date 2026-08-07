@@ -399,8 +399,6 @@ if barstate.islast
             lbSup := label.new(tagX, validSupport, "S", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(color.teal, 20), textcolor=color.white, size=size.normal)
         else
             label.set_xy(lbSup, tagX, validSupport)
-            label.set_xloc(lbSup, xloc.bar_time)
-            label.set_yloc(lbSup, yloc.price)
             label.set_text(lbSup, "S")
     else
         if not na(lbSup)
@@ -417,8 +415,6 @@ if barstate.islast
             lbRes := label.new(tagX, validResist, "R", xloc=xloc.bar_time, yloc=yloc.price, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.normal)
         else
             label.set_xy(lbRes, tagX, validResist)
-            label.set_xloc(lbRes, xloc.bar_time)
-            label.set_yloc(lbRes, yloc.price)
             label.set_text(lbRes, "R")
     else
         if not na(lbRes)
@@ -432,8 +428,6 @@ if barstate.islast
                 label lb = array.get(liqLbl, i)
                 if not na(lb)
                     label.set_xy(lb, array.get(liqTime, i), array.get(liqPrice, i))
-                    label.set_xloc(lb, xloc.bar_time)
-                    label.set_yloc(lb, yloc.price)
                     label.set_text(lb, f_fmtPool(array.get(liqIsHigh, i), array.get(liqVol, i)))
 
 if showPlan and (buySignal or sellSignal)

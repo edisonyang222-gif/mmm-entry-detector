@@ -197,18 +197,12 @@ if showLevels and barstate.islast
 
     if showLevelLbl and not na(lbPdh)
         label.set_xy(lbPdh, tagX, pdh)
-        label.set_xloc(lbPdh, xloc.bar_time)
-        label.set_yloc(lbPdh, yloc.price)
         label.set_text(lbPdh, "R " + str.tostring(pdh, format.mintick))
     if showLevelLbl and not na(lbPdl)
         label.set_xy(lbPdl, tagX, pdl)
-        label.set_xloc(lbPdl, xloc.bar_time)
-        label.set_yloc(lbPdl, yloc.price)
         label.set_text(lbPdl, "S " + str.tostring(pdl, format.mintick))
     if showLevelLbl and not na(lbDo)
         label.set_xy(lbDo, tagX, dayOpen)
-        label.set_xloc(lbDo, xloc.bar_time)
-        label.set_yloc(lbDo, yloc.price)
         label.set_text(lbDo, "Open " + str.tostring(dayOpen, format.mintick))
 
 float mid = not na(pdh) and not na(pdl) ? (pdh + pdl) * 0.5 : na

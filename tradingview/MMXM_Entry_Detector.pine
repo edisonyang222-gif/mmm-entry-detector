@@ -129,7 +129,6 @@ f_htfBiasCalc() =>
         if not na(mid)
             bias := close > mid ? 1 : close < mid ? -1 : 0
     else
-        // 結構突破BOS：收破前一段高低 → 更新偏向；否則維持區間中軸
         bool bullBos = not na(swingHi[1]) and close > swingHi[1]
         bool bearBos = not na(swingLo[1]) and close < swingLo[1]
         if bullBos
@@ -154,7 +153,6 @@ f_htfAllows(bool isBuy) =>
     else
         isBuy ? htfBias > 0 : htfBias < 0
 
-// ICT entry price inside FVG (+ optional OTE of manip→expansion leg)
 f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
     float proximal = isBuy ? bot : top
     float mid = (top + bot) * 0.5
@@ -167,74 +165,49 @@ f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
         result := oteInFvg ? ote : mid
     result
 
-// All drawings use xloc.bar_index so boxes/lines stay locked to candles
-// (projected wall-clock time drifts across session gaps / zoom / scroll).
-f_updatePending(box pendingBox, bool isBuy, float top, float bot, int leftBar) =>
-    box out = pendingBox
-    if showPending and not na(top) and not na(bot)
-        string htfTag = htfFilterOn ? " ·HTF" + f_htfName(htfBias) : ""
-        string t = (isBuy ? "等待作多·" : "等待作空·") + entryTrigger + htfTag
-        int x1 = na(leftBar) ? bar_index : leftBar
-        if na(out)
-            out := box.new(x1, top, bar_index, bot, xloc=xloc.bar_index, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=t, text_size=size.tiny, text_color=color.new(#f57f17, 0))
-        else
-            box.set_right(out, bar_index)
-            box.set_top(out, top)
-            box.set_bottom(out, bot)
-            box.set_text(out, t)
-    out
+// 盈虧區改用 plot/fill（跟K線同一座標系，捲動必跟著走）
+// box/line 在部分情況下會看起來「留在原地」
+type TradeSetup
+    int x1
+    float entry
+    float sl
+    float tp
+    float fvgTop
+    float fvgBot
+    float accHi
+    float accLo
+    int accStart
+    int fvgBar
+    bool isBuy
+    string modeTxt
 
-f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar, int fvgBar, string modeTxt) =>
-    int x1 = bar_index
-    int x2 = bar_index + boxBars
+var TradeSetup[] trades = array.new<TradeSetup>()
+
+f_registerSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar, int fvgBar, string modeTxt) =>
     float risk = math.abs(entry - sl)
     float reward = math.abs(tp - entry)
     float rr = risk > 0.0 ? reward / risk : 0.0
-    string sideTxt = isBuy ? "作多 MMBM" : "作空 MMSM"
-    color riskC = isBuy ? buyRiskCol : sellRiskCol
-    color rewC = isBuy ? buyRewardCol : sellRewardCol
-    color entryC = isBuy ? color.teal : color.orange
-    float t1Level = isBuy ? entry + risk * ertT1RR : entry - risk * ertT1RR
-    bool useErtDraw = isErtMode or ertLabels
+    array.push(trades, TradeSetup.new(bar_index, entry, sl, tp, fvgTop, fvgBot, accHi, accLo, accStartBar, fvgBar, isBuy, modeTxt))
+    if array.size(trades) > 40
+        array.shift(trades)
 
+    // 結構框：用 chart.point 綁定 bar index（可關）
     if showAccBox and not na(accHi) and not na(accLo)
         int ax1 = na(accStartBar) ? math.max(bar_index - lookback, 0) : accStartBar
-        box.new(ax1, accHi, x1, accLo, xloc=xloc.bar_index, bgcolor=accCol, border_color=color.new(#ab47bc, 40), border_width=1, text="累積", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
-
+        box.new(chart.point.from_index(ax1, accHi), chart.point.from_index(bar_index, accLo), border_color=color.new(#ab47bc, 40), border_width=1, bgcolor=accCol, text="累積", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
     if showFvgBox and not na(fvgTop) and not na(fvgBot)
         int fx1 = na(fvgBar) ? math.max(bar_index - 2, 0) : fvgBar
-        box.new(fx1, fvgTop, x2, fvgBot, xloc=xloc.bar_index, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="失衡區FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
+        int fx2 = bar_index + boxBars
+        box.new(chart.point.from_index(fx1, fvgTop), chart.point.from_index(fx2, fvgBot), border_color=color.new(#42a5f5, 30), border_width=1, bgcolor=fvgCol, text="失衡區FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
 
-    if showRrBoxes
-        if isBuy
-            box.new(x1, entry, x2, sl, xloc=xloc.bar_index, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text=useErtDraw ? "R 風險" : "風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
-            box.new(x1, tp, x2, entry, xloc=xloc.bar_index, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text=useErtDraw ? "T 目標" : "獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
-        else
-            box.new(x1, sl, x2, entry, xloc=xloc.bar_index, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text=useErtDraw ? "R 風險" : "風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
-            box.new(x1, entry, x2, tp, xloc=xloc.bar_index, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text=useErtDraw ? "T 目標" : "獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
-
-    if showLevelLines
-        line.new(x1, entry, x2, entry, xloc=xloc.bar_index, color=entryC, width=2)
-        line.new(x1, sl, x2, sl, xloc=xloc.bar_index, color=color.red, width=2, style=line.style_dashed)
-        line.new(x1, tp, x2, tp, xloc=xloc.bar_index, color=color.lime, width=2, style=line.style_dashed)
-        if showTP1 or useErtDraw
-            line.new(x1, t1Level, x2, t1Level, xloc=xloc.bar_index, color=color.new(color.yellow, 30), width=1, style=line.style_dotted)
-            label.new(x2, t1Level, (useErtDraw ? "T1 " : "1R ") + f_px(t1Level), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.yellow, 70), textcolor=color.black, size=size.tiny)
-        if useErtDraw
-            label.new(x2, entry, "E 進場 " + f_px(entry), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
-            label.new(x2, sl, "R 停損 " + f_px(sl), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
-            label.new(x2, tp, "T2 停利 " + f_px(tp), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
-        else
-            label.new(x2, entry, "進場 " + f_px(entry), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
-            label.new(x2, sl, "停損 " + f_px(sl), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
-            label.new(x2, tp, "停利 " + f_px(tp), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
-
+    bool useErtDraw = isErtMode or ertLabels
+    string sideTxt = isBuy ? "作多 MMBM" : "作空 MMSM"
+    color entryC = isBuy ? color.teal : color.orange
     string htfLine = htfFilterOn ? "\nHTF " + f_htfName(htfBias) : ""
     string body = sideTxt + "\n模型 " + entryModel + "\n確認 " + modeTxt + htfLine + "\n" + (useErtDraw ? "E " : "進場 ") + f_px(entry) + "\n" + (useErtDraw ? "R " : "停損 ") + f_px(sl) + "\n" + (useErtDraw ? "T2 " : "停利 ") + f_px(tp) + "\n報酬比 1:" + str.tostring(rr, "#.##")
-    label.new(x1, sl, body, xloc=xloc.bar_index, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
+    label.new(chart.point.from_index(bar_index, sl), body, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
     rr
 
-// ICT entry confirmation (no global writes)
 f_entryConfirmed(bool isBuy, float entry, float fvgTop, float fvgBot) =>
     bool tappedZone = isBuy ? (low <= fvgTop and high >= fvgBot) : (high >= fvgBot and low <= fvgTop)
     bool tappedCE = low <= entry and high >= entry
@@ -247,7 +220,6 @@ f_entryConfirmed(bool isBuy, float entry, float fvgTop, float fvgBot) =>
     else if entryTrigger == "收K進入失衡區"
         ok := closeInFvg and dirOk
     else
-        // 收K確認進場
         ok := (tappedZone or tappedCE) and closeBack and dirOk
     ok
 
@@ -268,7 +240,6 @@ var float bExpExt = float(na)
 var float bEntry = float(na)
 var float bSL = float(na)
 var float bTP = float(na)
-var box bPendingBox = na
 
 // ---- Sell state ----
 var int sPhase = IDLE
@@ -287,7 +258,6 @@ var float sExpExt = float(na)
 var float sEntry = float(na)
 var float sSL = float(na)
 var float sTP = float(na)
-var box sPendingBox = na
 
 var bool buySignal = false
 var bool sellSignal = false
@@ -320,9 +290,6 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bEntry := float(na)
         bSL := float(na)
         bTP := float(na)
-        if not na(bPendingBox)
-            box.delete(bPendingBox)
-            bPendingBox := na
 
     if bPhase == IDLE or bPhase == ACC
         if bPhase == ACC and bAccCount >= minAccBars and not na(bAccLo)
@@ -348,9 +315,6 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 bEntry := float(na)
                 bSL := float(na)
                 bTP := float(na)
-                if not na(bPendingBox)
-                    box.delete(bPendingBox)
-                    bPendingBox := na
         else if candTight
             if bPhase == IDLE or na(bAccLo)
                 bPhase := ACC
@@ -381,9 +345,6 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
             bEntry := float(na)
             bSL := float(na)
             bTP := float(na)
-            if not na(bPendingBox)
-                box.delete(bPendingBox)
-                bPendingBox := na
 
     else if bPhase == MAN
         if not na(bManip) and low < bManip
@@ -429,28 +390,20 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 bSL := sl
                 bTP := tp
                 bPhase := WAIT
-                bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, bFvgBar)
             else
                 bPhase := INV
         else if bar_index - bExpBar >= 3
             bPhase := INV
 
     else if bPhase == WAIT
-        bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, bFvgBar)
         bool timedOut = bar_index - bFvgBar >= maxWaitBars
         bool stopped = close < bSL
         bool fvgBroken = close < bFvgBot
         if timedOut or stopped or fvgBroken
             bPhase := INV
-            if not na(bPendingBox)
-                box.delete(bPendingBox)
-                bPendingBox := na
         else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true)
             buySignal := true
-            buyRR := f_drawSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartBar, bFvgBar, entryTrigger)
-            if not na(bPendingBox)
-                box.delete(bPendingBox)
-                bPendingBox := na
+            buyRR := f_registerSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartBar, bFvgBar, entryTrigger)
             bPhase := ENT
 
     // ===================== SELL =====================
@@ -469,9 +422,6 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         sEntry := float(na)
         sSL := float(na)
         sTP := float(na)
-        if not na(sPendingBox)
-            box.delete(sPendingBox)
-            sPendingBox := na
 
     if sPhase == IDLE or sPhase == ACC
         if sPhase == ACC and sAccCount >= minAccBars and not na(sAccHi)
@@ -497,9 +447,6 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 sEntry := float(na)
                 sSL := float(na)
                 sTP := float(na)
-                if not na(sPendingBox)
-                    box.delete(sPendingBox)
-                    sPendingBox := na
         else if candTight
             if sPhase == IDLE or na(sAccHi)
                 sPhase := ACC
@@ -530,9 +477,6 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
             sEntry := float(na)
             sSL := float(na)
             sTP := float(na)
-            if not na(sPendingBox)
-                box.delete(sPendingBox)
-                sPendingBox := na
 
     else if sPhase == MAN
         if not na(sManip) and high > sManip
@@ -578,29 +522,51 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 sSL := sl
                 sTP := tp
                 sPhase := WAIT
-                sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, sFvgBar)
             else
                 sPhase := INV
         else if bar_index - sExpBar >= 3
             sPhase := INV
 
     else if sPhase == WAIT
-        sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, sFvgBar)
         bool timedOut = bar_index - sFvgBar >= maxWaitBars
         bool stopped = close > sSL
         bool fvgBroken = close > sFvgTop
         if timedOut or stopped or fvgBroken
             sPhase := INV
-            if not na(sPendingBox)
-                box.delete(sPendingBox)
-                sPendingBox := na
         else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false)
             sellSignal := true
-            sellRR := f_drawSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
-            if not na(sPendingBox)
-                box.delete(sPendingBox)
-                sPendingBox := na
+            sellRR := f_registerSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             sPhase := ENT
+
+// ---- 盈虧區：plot/fill 綁在每根K線上，移動圖表一定跟著走 ----
+float rrEntry = float(na)
+float rrSl = float(na)
+float rrTp = float(na)
+float rrT1 = float(na)
+bool rrOn = false
+bool rrIsBuy = false
+if array.size(trades) > 0
+    for i = 0 to array.size(trades) - 1
+        TradeSetup t = array.get(trades, i)
+        if bar_index >= t.x1 and bar_index <= t.x1 + boxBars
+            rrEntry := t.entry
+            rrSl := t.sl
+            rrTp := t.tp
+            float risk = math.abs(t.entry - t.sl)
+            rrT1 := t.isBuy ? t.entry + risk * ertT1RR : t.entry - risk * ertT1RR
+            rrOn := true
+            rrIsBuy := t.isBuy
+
+color eCol = rrOn ? (rrIsBuy ? color.teal : color.orange) : color.new(color.gray, 100)
+color rCol = rrOn ? color.red : color.new(color.gray, 100)
+color tCol = rrOn ? color.lime : color.new(color.gray, 100)
+color t1Col = rrOn and (showTP1 or isErtMode or ertLabels) ? color.new(color.yellow, 30) : color.new(color.gray, 100)
+fill(plotE, plotR, title="風險區R", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRiskCol : sellRiskCol) : na)
+fill(plotE, plotT, title="目標區T", color=showRrBoxes and rrOn ? (rrIsBuy ? buyRewardCol : sellRewardCol) : na)
+
+// 等待回踩：用背景色（跟著K線），不用會漂的 box
+bgcolor(showPending and bPhase == WAIT ? color.new(#ffca28, 88) : na, title="等待作多回踩")
+bgcolor(showPending and sPhase == WAIT ? color.new(#ffb300, 88) : na, title="等待作空回踩")
 
 // plotshape text must be const string (CE10123) — split by mode
 plotshape(showMarkers and showBuy and buySignal and isErtMode, title="ERT作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.normal, text="E多")

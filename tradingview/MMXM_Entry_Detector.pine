@@ -7,11 +7,18 @@ indicator("MMXM 進場偵測器", overlay=true, max_labels_count=500, max_lines_
 // 時區無關（只看 OHLC）。禁止在函式內改全域變數（CE10088）。
 
 // ===== ICT 進場模型 =====
-string entryModel = input.string("ERT交易系統", "進場模型", options=["MMXM第四階段", "ERT交易系統"], group="ICT進場模型", tooltip="ERT=高週期偏向過濾 + LTF MMXM第四階段進場，並標示 E/R/T1/T2。MMXM第四階段=僅本週期結構。")
+string entryModel = input.string("ERT交易系統", "進場模型", options=["MMXM第四階段", "ERT交易系統", "PO3派發進場"], group="ICT進場模型", tooltip="PO3=Power of Three（累積→操控→派發），進場偏在派發階段。ERT=HTF+MMXM。MMXM=僅本週期第四階段。")
 string entryFill  = input.string("中點CE", "進場參考價", options=["中點CE", "近端", "OTE62"], group="ICT進場模型", tooltip="中點CE=FVG 50%；近端=先碰到的FVG邊界；OTE62=位移腿 62% 回撤（若落在FVG內優先，否則用中點）")
 string entryTrigger = input.string("收K確認進場", "進場確認方式", options=["觸價可進場", "收K確認進場", "收K進入失衡區"], group="ICT進場模型", tooltip="觸價可進場=影線碰到即可（偏限價）；收K確認進場=碰到後收盤回到進場側；收K進入失衡區=收盤落入FVG內才算")
 bool   requireMss = input.bool(true, "需要結構突破MSS（收破累積區間）", group="ICT進場模型")
 bool   requireBullBearClose = input.bool(true, "收K確認時需同向收盤（多收陽/空收陰）", group="ICT進場模型")
+
+// ===== PO3 Power of Three（AMD）=====
+bool   usePo3 = input.bool(true, "啟用PO3（AMD）判別", group="PO3 Power of Three", tooltip="Accumulation累積 → Manipulation操控(Judas) → Distribution派發")
+string po3Tf = input.timeframe("D", "PO3參考週期", group="PO3 Power of Three", tooltip="常用日線 D：以當日開盤為錨，判斷當日PO3階段")
+int    po3MinAccBars = input.int(3, "累積最少根數", minval=1, group="PO3 Power of Three")
+bool   po3Filter = input.bool(false, "進場需在派發階段且同向", group="PO3 Power of Three", tooltip="開啟後：多單需PO3派發偏多、空單需派發偏空。選PO3派發進場時自動啟用。")
+bool   showPo3Bg = input.bool(false, "PO3階段背景色（可選）", group="PO3 Power of Three")
 
 // ===== HTF → LTF 多週期 =====
 bool   useHtfFilter = input.bool(true, "啟用高週期(HTF)偏向過濾", group="HTF→LTF多週期", tooltip="僅在高週期偏向與低週期進場方向一致時才出訊號。ERT模式建議開啟。")
@@ -64,7 +71,9 @@ color sellRiskCol = input.color(color.new(#ef5350, 80), "作空風險色帶", gr
 color sellRewardCol = input.color(color.new(#26a69a, 80), "作空獲利色帶", group="顏色")
 
 bool isErtMode = entryModel == "ERT交易系統"
-bool htfFilterOn = useHtfFilter or (isErtMode and ertRequireHtf)
+bool isPo3Mode = entryModel == "PO3派發進場"
+bool htfFilterOn = useHtfFilter or (isErtMode and ertRequireHtf) or isPo3Mode
+bool po3FilterOn = usePo3 and (po3Filter or isPo3Mode)
 
 float atrVal = ta.atr(atrPeriod)
 
@@ -243,6 +252,89 @@ f_dolAllows(bool isBuy) =>
         false
     else
         isBuy ? dolDir > 0 : dolDir < 0
+
+// ----- PO3 Power of Three：Accumulation → Manipulation → Distribution -----
+int PO3_OFF = 0
+int PO3_ACC = 1
+int PO3_MAN = 2
+int PO3_DIST = 3
+
+float po3OpenRaw = request.security(syminfo.tickerid, po3Tf, open, barmerge.gaps_off, barmerge.lookahead_off)
+bool po3NewPeriod = timeframe.change(po3Tf)
+
+var int po3Phase = 0
+var int po3Dir = 0
+var float po3O = float(na)
+var float po3AccHi = float(na)
+var float po3AccLo = float(na)
+var float po3ManExt = float(na)
+var int po3AccBars = 0
+
+if usePo3
+    if po3NewPeriod or na(po3O)
+        po3O := nz(po3OpenRaw, open)
+        po3AccHi := high
+        po3AccLo := low
+        po3Phase := PO3_ACC
+        po3Dir := 0
+        po3ManExt := float(na)
+        po3AccBars := 1
+    else if po3Phase == PO3_ACC
+        // 先判斷是否掃出累積區間，再更新區間（避免自取消）
+        if po3AccBars >= po3MinAccBars and not na(po3AccLo) and low < po3AccLo
+            po3Phase := PO3_MAN
+            po3Dir := 1
+            po3ManExt := low
+        else if po3AccBars >= po3MinAccBars and not na(po3AccHi) and high > po3AccHi
+            po3Phase := PO3_MAN
+            po3Dir := -1
+            po3ManExt := high
+        else
+            po3AccHi := math.max(po3AccHi, high)
+            po3AccLo := math.min(po3AccLo, low)
+            // 相對開盤的 Judas 也可觸發操控
+            if po3AccBars >= po3MinAccBars and not na(po3O)
+                if low < po3O and low <= po3AccLo
+                    po3Phase := PO3_MAN
+                    po3Dir := 1
+                    po3ManExt := low
+                else if high > po3O and high >= po3AccHi
+                    po3Phase := PO3_MAN
+                    po3Dir := -1
+                    po3ManExt := high
+            if po3Phase == PO3_ACC
+                po3AccBars := po3AccBars + 1
+    else if po3Phase == PO3_MAN
+        if po3Dir > 0
+            if not na(po3ManExt) and low < po3ManExt
+                po3ManExt := low
+            bool reclaim = close > po3O or (not na(po3AccHi) and close > po3AccHi)
+            if reclaim and (f_isDisp(true) or close > open)
+                po3Phase := PO3_DIST
+        else if po3Dir < 0
+            if not na(po3ManExt) and high > po3ManExt
+                po3ManExt := high
+            bool reclaim = close < po3O or (not na(po3AccLo) and close < po3AccLo)
+            if reclaim and (f_isDisp(false) or close < open)
+                po3Phase := PO3_DIST
+
+f_po3Name() =>
+    if not usePo3
+        "關閉"
+    else
+        switch po3Phase
+            PO3_ACC => "①累積 ACC"
+            PO3_MAN => po3Dir > 0 ? "②操控 MAN↓(偏多)" : po3Dir < 0 ? "②操控 MAN↑(偏空)" : "②操控 MAN"
+            PO3_DIST => po3Dir > 0 ? "③派發 DIST↑" : po3Dir < 0 ? "③派發 DIST↓" : "③派發 DIST"
+            => "待機"
+
+f_po3Allows(bool isBuy) =>
+    if not po3FilterOn
+        true
+    else if po3Phase != PO3_DIST or po3Dir == 0
+        false
+    else
+        isBuy ? po3Dir > 0 : po3Dir < 0
 
 f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
     float proximal = isBuy ? bot : top

@@ -66,7 +66,7 @@ else
         if barsInDay >= orbBars
             orbReady := true
 
-mid = not na(pdh) and not na(pdl) ? (pdh + pdl) * 0.5 : na
+float mid = not na(pdh) and not na(pdl) ? (pdh + pdl) * 0.5 : na
 levelsReady = not na(pdh) and not na(pdl)
 
 tol = touchTolAtr * atr
@@ -82,7 +82,7 @@ allowSell = not onePerDay or lastSellDay != dayId
 f_plan(sideIsBuy, entry, level, structural) =>
     stopDist = stopAtrMult * atr
     stop = sideIsBuy ? entry - stopDist : entry + stopDist
-    tp = na
+    float tp = na
     if useLevelTP and not na(structural)
         if sideIsBuy and structural > entry
             tp := structural

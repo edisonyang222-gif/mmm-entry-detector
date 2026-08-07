@@ -167,8 +167,8 @@ if barstate.isconfirmed
         highLeftZone := true
 
 // 有效支撐/阻力
-validSupport = hasLowSweep and not na(lowSweepLevel) ? lowSweepLevel : (not na(lastSwingLow) and not swingLowBroken and close > lastSwingLow ? lastSwingLow : na)
-validResist  = hasHighSweep and not na(highSweepLevel) ? highSweepLevel : (not na(lastSwingHigh) and not swingHighBroken and close < lastSwingHigh ? lastSwingHigh : na)
+float validSupport = hasLowSweep and not na(lowSweepLevel) ? lowSweepLevel : (not na(lastSwingLow) and not swingLowBroken and close > lastSwingLow ? lastSwingLow : na)
+float validResist  = hasHighSweep and not na(highSweepLevel) ? highSweepLevel : (not na(lastSwingHigh) and not swingHighBroken and close < lastSwingHigh ? lastSwingHigh : na)
 supNote = hasLowSweep ? "掃除後有效支撐" : (not na(validSupport) ? "擺盪低點支撐" : "無")
 resNote = hasHighSweep ? "掃除後有效阻力" : (not na(validResist) ? "擺盪高點阻力" : "無")
 

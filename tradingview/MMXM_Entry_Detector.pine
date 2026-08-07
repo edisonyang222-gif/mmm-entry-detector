@@ -115,12 +115,6 @@ f_bearFvgBot() =>
 f_px(float v) =>
     str.tostring(v, format.mintick)
 
-f_barMs() =>
-    math.max(timeframe.in_seconds() * 1000, 1000)
-
-f_rightTime(int barsAhead) =>
-    time + barsAhead * f_barMs()
-
 // HTF bias: 1=bull, -1=bear, 0=flat/unknown
 f_htfBiasCalc() =>
     float swingHi = ta.highest(high, htfSwingLen)
@@ -173,23 +167,26 @@ f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
         result := oteInFvg ? ote : mid
     result
 
-f_updatePending(box pendingBox, bool isBuy, float top, float bot) =>
+// All drawings use xloc.bar_index so boxes/lines stay locked to candles
+// (projected wall-clock time drifts across session gaps / zoom / scroll).
+f_updatePending(box pendingBox, bool isBuy, float top, float bot, int leftBar) =>
     box out = pendingBox
     if showPending and not na(top) and not na(bot)
         string htfTag = htfFilterOn ? " ·HTF" + f_htfName(htfBias) : ""
         string t = (isBuy ? "等待作多·" : "等待作空·") + entryTrigger + htfTag
+        int x1 = na(leftBar) ? bar_index : leftBar
         if na(out)
-            out := box.new(time, top, time_close, bot, xloc=xloc.bar_time, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=t, text_size=size.tiny, text_color=color.new(#f57f17, 0))
+            out := box.new(x1, top, bar_index, bot, xloc=xloc.bar_index, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=t, text_size=size.tiny, text_color=color.new(#f57f17, 0))
         else
-            box.set_right(out, time_close)
+            box.set_right(out, bar_index)
             box.set_top(out, top)
             box.set_bottom(out, bot)
             box.set_text(out, t)
     out
 
-f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartTime, int fvgTime, string modeTxt) =>
-    int t1 = time
-    int t2 = f_rightTime(boxBars)
+f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar, int fvgBar, string modeTxt) =>
+    int x1 = bar_index
+    int x2 = bar_index + boxBars
     float risk = math.abs(entry - sl)
     float reward = math.abs(tp - entry)
     float rr = risk > 0.0 ? reward / risk : 0.0
@@ -201,40 +198,40 @@ f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvg
     bool useErtDraw = isErtMode or ertLabels
 
     if showAccBox and not na(accHi) and not na(accLo)
-        int ax1 = na(accStartTime) ? time[math.min(lookback * 3, bar_index)] : accStartTime
-        box.new(ax1, accHi, t1, accLo, xloc=xloc.bar_time, bgcolor=accCol, border_color=color.new(#ab47bc, 40), border_width=1, text="累積", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
+        int ax1 = na(accStartBar) ? math.max(bar_index - lookback, 0) : accStartBar
+        box.new(ax1, accHi, x1, accLo, xloc=xloc.bar_index, bgcolor=accCol, border_color=color.new(#ab47bc, 40), border_width=1, text="累積", text_size=size.tiny, text_color=color.new(#ab47bc, 0))
 
     if showFvgBox and not na(fvgTop) and not na(fvgBot)
-        int fx1 = na(fvgTime) ? time[math.min(2, bar_index)] : fvgTime
-        box.new(fx1, fvgTop, t2, fvgBot, xloc=xloc.bar_time, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="失衡區FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
+        int fx1 = na(fvgBar) ? math.max(bar_index - 2, 0) : fvgBar
+        box.new(fx1, fvgTop, x2, fvgBot, xloc=xloc.bar_index, bgcolor=fvgCol, border_color=color.new(#42a5f5, 30), border_width=1, text="失衡區FVG", text_size=size.tiny, text_color=color.new(#1565c0, 0))
 
     if showRrBoxes
         if isBuy
-            box.new(t1, entry, t2, sl, xloc=xloc.bar_time, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text=useErtDraw ? "R 風險" : "風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
-            box.new(t1, tp, t2, entry, xloc=xloc.bar_time, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text=useErtDraw ? "T 目標" : "獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
+            box.new(x1, entry, x2, sl, xloc=xloc.bar_index, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text=useErtDraw ? "R 風險" : "風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, tp, x2, entry, xloc=xloc.bar_index, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text=useErtDraw ? "T 目標" : "獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
         else
-            box.new(t1, sl, t2, entry, xloc=xloc.bar_time, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text=useErtDraw ? "R 風險" : "風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
-            box.new(t1, entry, t2, tp, xloc=xloc.bar_time, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text=useErtDraw ? "T 目標" : "獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
+            box.new(x1, sl, x2, entry, xloc=xloc.bar_index, bgcolor=riskC, border_color=color.new(#c62828, 20), border_width=1, text=useErtDraw ? "R 風險" : "風險1R", text_color=color.new(#b71c1c, 0), text_size=size.tiny)
+            box.new(x1, entry, x2, tp, xloc=xloc.bar_index, bgcolor=rewC, border_color=color.new(#00695c, 20), border_width=1, text=useErtDraw ? "T 目標" : "獲利", text_color=color.new(#004d40, 0), text_size=size.tiny)
 
     if showLevelLines
-        line.new(t1, entry, t2, entry, xloc=xloc.bar_time, color=entryC, width=2)
-        line.new(t1, sl, t2, sl, xloc=xloc.bar_time, color=color.red, width=2, style=line.style_dashed)
-        line.new(t1, tp, t2, tp, xloc=xloc.bar_time, color=color.lime, width=2, style=line.style_dashed)
+        line.new(x1, entry, x2, entry, xloc=xloc.bar_index, color=entryC, width=2)
+        line.new(x1, sl, x2, sl, xloc=xloc.bar_index, color=color.red, width=2, style=line.style_dashed)
+        line.new(x1, tp, x2, tp, xloc=xloc.bar_index, color=color.lime, width=2, style=line.style_dashed)
         if showTP1 or useErtDraw
-            line.new(t1, t1Level, t2, t1Level, xloc=xloc.bar_time, color=color.new(color.yellow, 30), width=1, style=line.style_dotted)
-            label.new(t2, t1Level, (useErtDraw ? "T1 " : "1R ") + f_px(t1Level), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.yellow, 70), textcolor=color.black, size=size.tiny)
+            line.new(x1, t1Level, x2, t1Level, xloc=xloc.bar_index, color=color.new(color.yellow, 30), width=1, style=line.style_dotted)
+            label.new(x2, t1Level, (useErtDraw ? "T1 " : "1R ") + f_px(t1Level), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.yellow, 70), textcolor=color.black, size=size.tiny)
         if useErtDraw
-            label.new(t2, entry, "E 進場 " + f_px(entry), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
-            label.new(t2, sl, "R 停損 " + f_px(sl), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
-            label.new(t2, tp, "T2 停利 " + f_px(tp), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+            label.new(x2, entry, "E 進場 " + f_px(entry), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
+            label.new(x2, sl, "R 停損 " + f_px(sl), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+            label.new(x2, tp, "T2 停利 " + f_px(tp), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
         else
-            label.new(t2, entry, "進場 " + f_px(entry), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
-            label.new(t2, sl, "停損 " + f_px(sl), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
-            label.new(t2, tp, "停利 " + f_px(tp), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
+            label.new(x2, entry, "進場 " + f_px(entry), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(entryC, 20), textcolor=color.white, size=size.small)
+            label.new(x2, sl, "停損 " + f_px(sl), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+            label.new(x2, tp, "停利 " + f_px(tp), xloc=xloc.bar_index, style=label.style_label_left, color=color.new(color.green, 20), textcolor=color.white, size=size.small)
 
     string htfLine = htfFilterOn ? "\nHTF " + f_htfName(htfBias) : ""
     string body = sideTxt + "\n模型 " + entryModel + "\n確認 " + modeTxt + htfLine + "\n" + (useErtDraw ? "E " : "進場 ") + f_px(entry) + "\n" + (useErtDraw ? "R " : "停損 ") + f_px(sl) + "\n" + (useErtDraw ? "T2 " : "停利 ") + f_px(tp) + "\n報酬比 1:" + str.tostring(rr, "#.##")
-    label.new(t1, sl, body, xloc=xloc.bar_time, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
+    label.new(x1, sl, body, xloc=xloc.bar_index, style=isBuy ? label.style_label_up : label.style_label_down, color=color.new(entryC, 15), textcolor=color.white, size=size.normal)
     rr
 
 // ICT entry confirmation (no global writes)
@@ -432,14 +429,14 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 bSL := sl
                 bTP := tp
                 bPhase := WAIT
-                bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot)
+                bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, bFvgBar)
             else
                 bPhase := INV
         else if bar_index - bExpBar >= 3
             bPhase := INV
 
     else if bPhase == WAIT
-        bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot)
+        bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, bFvgBar)
         bool timedOut = bar_index - bFvgBar >= maxWaitBars
         bool stopped = close < bSL
         bool fvgBroken = close < bFvgBot
@@ -450,7 +447,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 bPendingBox := na
         else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true)
             buySignal := true
-            buyRR := f_drawSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartTime, bFvgTime, entryTrigger)
+            buyRR := f_drawSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartBar, bFvgBar, entryTrigger)
             if not na(bPendingBox)
                 box.delete(bPendingBox)
                 bPendingBox := na
@@ -581,14 +578,14 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 sSL := sl
                 sTP := tp
                 sPhase := WAIT
-                sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot)
+                sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, sFvgBar)
             else
                 sPhase := INV
         else if bar_index - sExpBar >= 3
             sPhase := INV
 
     else if sPhase == WAIT
-        sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot)
+        sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, sFvgBar)
         bool timedOut = bar_index - sFvgBar >= maxWaitBars
         bool stopped = close > sSL
         bool fvgBroken = close > sFvgTop
@@ -599,7 +596,7 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
                 sPendingBox := na
         else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false)
             sellSignal := true
-            sellRR := f_drawSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartTime, sFvgTime, entryTrigger)
+            sellRR := f_drawSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             if not na(sPendingBox)
                 box.delete(sPendingBox)
                 sPendingBox := na

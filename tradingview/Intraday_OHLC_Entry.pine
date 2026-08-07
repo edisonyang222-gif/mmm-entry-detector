@@ -114,8 +114,8 @@ if newDay
             lnOrh := na
             lnOrl := na
         if showLevelLbl
-            lbPdh := label.new(bar_index, pdh, "PDH " + str.tostring(pdh, format.mintick), style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal, size=size.small)
-            lbPdl := label.new(bar_index, pdl, "PDL " + str.tostring(pdl, format.mintick), style=label.style_label_left, color=color.new(color.maroon, 70), textcolor=color.maroon, size=size.small)
+            lbPdh := label.new(bar_index, pdh, "R " + str.tostring(pdh, format.mintick), style=label.style_label_left, color=color.new(color.maroon, 70), textcolor=color.maroon, size=size.small)
+            lbPdl := label.new(bar_index, pdl, "S " + str.tostring(pdl, format.mintick), style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal, size=size.small)
             lbDo  := label.new(bar_index, dayOpen, "Open " + str.tostring(dayOpen, format.mintick), style=label.style_label_left, color=color.new(color.orange, 70), textcolor=color.orange, size=size.small)
 else
     dayHigh := math.max(nz(dayHigh, high), high)
@@ -169,9 +169,11 @@ if showLevels
     if showLevelLbl and not na(lbPdh)
         label.set_x(lbPdh, bar_index)
         label.set_y(lbPdh, pdh)
+        label.set_text(lbPdh, "R " + str.tostring(pdh, format.mintick))
     if showLevelLbl and not na(lbPdl)
         label.set_x(lbPdl, bar_index)
         label.set_y(lbPdl, pdl)
+        label.set_text(lbPdl, "S " + str.tostring(pdl, format.mintick))
     if showLevelLbl and not na(lbDo)
         label.set_x(lbDo, bar_index)
         label.set_y(lbDo, dayOpen)

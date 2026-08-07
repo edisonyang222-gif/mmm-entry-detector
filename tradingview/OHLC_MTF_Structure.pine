@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 indicator("OHLC多時框結構進場", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=100)
 
 //══════════════════════════════════════════════════════════════
@@ -63,26 +63,37 @@ if not na(pl)
     sl2 := sl1
     sl1 := pl
 
-chartBias() =>
+// 各時框獨立計算偏向（供 request.security 使用，避免吃到圖表全域狀態）
+tfBias() =>
+    pHi = ta.pivothigh(high, swingLen, swingLen)
+    pLo = ta.pivotlow(low, swingLen, swingLen)
+    var float sHi1 = na
+    var float sHi2 = na
+    var float sLo1 = na
+    var float sLo2 = na
+    if not na(pHi)
+        sHi2 := sHi1
+        sHi1 := pHi
+    if not na(pLo)
+        sLo2 := sLo1
+        sLo1 := pLo
     int b = 0
-    if not na(sh1) and not na(sh2) and not na(sl1) and not na(sl2)
-        hh = sh1 > sh2
-        hl = sl1 > sl2
-        lh = sh1 < sh2
-        ll = sl1 < sl2
+    if not na(sHi1) and not na(sHi2) and not na(sLo1) and not na(sLo2)
+        hh = sHi1 > sHi2
+        hl = sLo1 > sLo2
+        lh = sHi1 < sHi2
+        ll = sLo1 < sLo2
         if hh and hl
             b := 1
         else if lh and ll
             b := -1
     b
 
-ltfBias = chartBias()
+ltfBias = tfBias()
 
-// 高/中週期偏向（用 request.security，收盤確認）
-htfBiasRaw = request.security(syminfo.tickerid, htfTF, chartBias(), barmerge.gaps_off, barmerge.lookahead_off)
-mtfBiasRaw = request.security(syminfo.tickerid, mtfTF, chartBias(), barmerge.gaps_off, barmerge.lookahead_off)
-htfBias = nz(htfBiasRaw, 0)
-mtfBias = nz(mtfBiasRaw, 0)
+// 高/中週期偏向（收盤確認，不做超前）
+htfBias = nz(request.security(syminfo.tickerid, htfTF, tfBias(), barmerge.gaps_off, barmerge.lookahead_off), 0)
+mtfBias = nz(request.security(syminfo.tickerid, mtfTF, tfBias(), barmerge.gaps_off, barmerge.lookahead_off), 0)
 
 // 綜合偏向：HTF+MTF 同向最優先
 consensus =
@@ -120,8 +131,11 @@ swingHighBroken = not na(lastSwingHigh) and close > lastSwingHigh
 //══════════════════════════════════════════════════════════════
 wickMin = sweepWickAtr * atr
 
-sweepLowNow = barstate.isconfirmed and not na(lastSwingLow) and not swingLowBroken[1] and low < lastSwingLow - wickMin and close > lastSwingLow and close > open
-sweepHighNow = barstate.isconfirmed and not na(lastSwingHigh) and not swingHighBroken[1] and high > lastSwingHigh + wickMin and close < lastSwingHigh and close < open
+// v6：布林不可為 na；歷史引用用明確布林比較
+prevSwingLowBroken = bar_index > 0 ? swingLowBroken[1] : false
+prevSwingHighBroken = bar_index > 0 ? swingHighBroken[1] : false
+sweepLowNow = barstate.isconfirmed and not na(lastSwingLow) and not prevSwingLowBroken and low < lastSwingLow - wickMin and close > lastSwingLow and close > open
+sweepHighNow = barstate.isconfirmed and not na(lastSwingHigh) and not prevSwingHighBroken and high > lastSwingHigh + wickMin and close < lastSwingHigh and close < open
 
 var bool  hasLowSweep = false
 var bool  hasHighSweep = false

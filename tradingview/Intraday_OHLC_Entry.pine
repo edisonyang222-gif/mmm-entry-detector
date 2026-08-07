@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 indicator("Intraday OHLC Entry", overlay=true, max_labels_count=500, max_lines_count=500)
 
 // --- Inputs ---
@@ -28,7 +28,7 @@ atr = ta.atr(atrLen)
 // Session day key (server/exchange time of chart)
 dayStart = timestamp(year, month, dayofmonth, sessionHour, 0)
 sessKey  = hour < sessionHour ? dayStart - 86400000 : dayStart
-newDay   = ta.change(sessKey) != 0
+newDay   = nz(ta.change(sessKey), 0) != 0
 
 var float pdh = na
 var float pdl = na
@@ -41,8 +41,8 @@ var float orbHigh = na
 var float orbLow = na
 var int   barsInDay = 0
 var bool  orbReady = false
-var int   lastBuyDay = na
-var int   lastSellDay = na
+var int   lastBuyDay = -1
+var int   lastSellDay = -1
 
 if newDay
     pdh := dayHigh

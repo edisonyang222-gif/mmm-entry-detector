@@ -1,5 +1,7 @@
 # TradingView 指標檔
 
+Pine Script：**`//@version=6`**
+
 ## 推薦（對應 MT5 多時框結構）
 
 **[`OHLC_MTF_Structure.pine`](OHLC_MTF_Structure.pine)**

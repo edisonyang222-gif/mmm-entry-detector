@@ -249,14 +249,29 @@ void UpdatePanel(const BiasSnapshot &bias, const LiquidityState &liqLive,
 void DrawHLine(const string name, const double price, const color clr, const ENUM_LINE_STYLE st)
   {
    if(!InpShowSRLines || price <= 0.0)
+     {
+      ObjectDelete(0, name);
+      ObjectDelete(0, name + "_TXT");
       return;
+     }
    ObjectDelete(0, name);
    ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetInteger(0, name, OBJPROP_STYLE, st);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
    ObjectSetInteger(0, name, OBJPROP_BACK, true);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+
+   // S / R 文字標示
+   const string tag = name + "_TXT";
+   ObjectDelete(0, tag);
+   ObjectCreate(0, tag, OBJ_TEXT, 0, TimeCurrent(), price);
+   ObjectSetString(0, tag, OBJPROP_TEXT, StringFind(name, "SUP") >= 0 ? "S" : "R");
+   ObjectSetInteger(0, tag, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, tag, OBJPROP_FONTSIZE, 12);
+   ObjectSetString(0, tag, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, tag, OBJPROP_ANCHOR, ANCHOR_LEFT);
+   ObjectSetInteger(0, tag, OBJPROP_SELECTABLE, false);
   }
 
 void PersistSignalObjects(const StructureSignal &sig)
@@ -291,7 +306,8 @@ void PersistSignalObjects(const StructureSignal &sig)
 
    ObjectDelete(0, key + "_L");
    ObjectCreate(0, key + "_L", OBJ_TEXT, 0, sig.barTime, sig.entry);
-   ObjectSetString(0, key + "_L", OBJPROP_TEXT, sig.patternCN);
+   const string tag = (sig.side == SIDE_BUY) ? ("S " + sig.patternCN) : ("R " + sig.patternCN);
+   ObjectSetString(0, key + "_L", OBJPROP_TEXT, tag);
    ObjectSetInteger(0, key + "_L", OBJPROP_COLOR, cArrow);
    ObjectSetInteger(0, key + "_L", OBJPROP_FONTSIZE, 9);
    ObjectSetString(0, key + "_L", OBJPROP_FONT, "Arial");

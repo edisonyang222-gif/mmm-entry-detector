@@ -158,10 +158,10 @@ string EntryKindCN(const ENUM_ENTRY_KIND k)
   {
    switch(k)
      {
-      case ENTRY_PULLBACK_SUPPORT: return "回踩有效支撐";
-      case ENTRY_PULLBACK_RESIST:  return "回踩有效阻力";
-      case ENTRY_RECLAIM_SUPPORT:  return "收復有效支撐";
-      case ENTRY_RECLAIM_RESIST:   return "跌破收回阻力";
+      case ENTRY_PULLBACK_SUPPORT: return "S 回踩有效支撐";
+      case ENTRY_PULLBACK_RESIST:  return "R 回踩有效阻力";
+      case ENTRY_RECLAIM_SUPPORT:  return "S 收復有效支撐";
+      case ENTRY_RECLAIM_RESIST:   return "R 跌破收回阻力";
       default:                     return "無";
      }
   }

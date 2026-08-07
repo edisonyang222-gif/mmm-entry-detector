@@ -794,9 +794,10 @@ fill(plotE, plotT, title="目標區", color=rrOn ? (rrIsBuy ? buyRewardCol : sel
 
 bgcolor(showPending and bPhase == WAIT ? color.new(#ffca28, 90) : na, title="等待作多回踩")
 bgcolor(showPending and sPhase == WAIT ? color.new(#ffb300, 90) : na, title="等待作空回踩")
-bgcolor(showPo3Bg and usePo3 and po3Phase == PO3_ACC ? color.new(#90caf9, 92) : na, title="PO3累積")
-bgcolor(showPo3Bg and usePo3 and po3Phase == PO3_MAN ? color.new(#ef9a9a, 92) : na, title="PO3操控")
-bgcolor(showPo3Bg and usePo3 and po3Phase == PO3_DIST ? color.new(#a5d6a7, 92) : na, title="PO3派發")
+
+// PO3：派發前三角提示（操控結束、即將派發）
+plotshape(showPo3Tip and usePo3 and po3TipBuy, title="PO3派發前提示多", style=shape.triangleup, location=location.belowbar, color=color.new(#00897b, 0), size=size.normal, text="派發進場")
+plotshape(showPo3Tip and usePo3 and po3TipSell, title="PO3派發前提示空", style=shape.triangledown, location=location.abovebar, color=color.new(#e65100, 0), size=size.normal, text="派發進場")
 
 plotshape(showMarkers and showBuy and buySignal and isPo3Mode, title="PO3作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="PO3多")
 plotshape(showMarkers and showBuy and buySignal and isErtMode, title="ERT作多", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="E多")
@@ -841,7 +842,7 @@ if showInfoTable and barstate.islast
 
 alertcondition(buySignal, "作多進場", "ICT MMXM/ERT/PO3 作多進場")
 alertcondition(sellSignal, "作空進場", "ICT MMXM/ERT/PO3 作空進場")
-alertcondition(usePo3 and po3Phase == PO3_DIST and po3Dir > 0, "PO3派發偏多", "PO3 進入派發（偏多）")
-alertcondition(usePo3 and po3Phase == PO3_DIST and po3Dir < 0, "PO3派發偏空", "PO3 進入派發（偏空）")
+alertcondition(po3TipBuy, "PO3派發進場多", "PO3 操控結束，派發前提示作多")
+alertcondition(po3TipSell, "PO3派發進場空", "PO3 操控結束，派發前提示作空")
 alertcondition(useErlIrl and dolPhase == 1 and dolDir != 0, "ERL→IRL", "流動性路徑：ERL→IRL")
 alertcondition(useErlIrl and dolPhase == 2 and dolDir != 0, "IRL→ERL", "流動性路徑：IRL→ERL")

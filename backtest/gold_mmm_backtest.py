@@ -135,12 +135,44 @@ class Params:
     htf_ema: int = 50
     use_adx: bool = True
     adx_len: int = 14
-    adx_min: float = 18.0
+    adx_min: float = 20.0
     use_macd: bool = True
     use_slope: bool = True
     slope_bars: int = 3
     min_score: int = 5
+    # 盤整過濾
+    use_range_filter: bool = True
+    use_chop: bool = True
+    chop_len: int = 14
+    chop_max: float = 61.8
+    use_ema_squeeze: bool = True
+    ema_gap_min_atr: float = 0.35
+    use_er: bool = True
+    er_len: int = 10
+    er_min: float = 0.25
     # 若 base TF 已是 H1，htf1 應設 4h、htf2 設 1D（由 CLI 覆寫）
+
+
+def choppiness(df: pd.DataFrame, length: int = 14) -> pd.Series:
+    tr = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - df["close"].shift(1)).abs(),
+            (df["low"] - df["close"].shift(1)).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    atr_sum = tr.rolling(length).sum()
+    hi = df["high"].rolling(length).max()
+    lo = df["low"].rolling(length).min()
+    rng = (hi - lo).replace(0, np.nan)
+    return 100 * np.log10(atr_sum / rng) / np.log10(length)
+
+
+def efficiency_ratio(close: pd.Series, length: int = 10) -> pd.Series:
+    move = (close - close.shift(length)).abs()
+    path = close.diff().abs().rolling(length).sum().replace(0, np.nan)
+    return move / path
 
 
 # ── signal engine ───────────────────────────────────────────
@@ -155,6 +187,8 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     out["atr_ma"] = out["atr"].rolling(p.atr_ma_len).mean()
     out["macd_hist"] = macd_hist(out["close"])
     out["adx"] = adx(out, p.adx_len)
+    out["chop"] = choppiness(out, p.chop_len)
+    out["er"] = efficiency_ratio(out["close"], p.er_len)
 
     bull = (out["ema_fast"] > out["ema_slow"]) & (out["close"] > out["ema_bias"])
     bear = (out["ema_fast"] < out["ema_slow"]) & (out["close"] < out["ema_bias"])
@@ -171,13 +205,22 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     bear_c = (out["close"] < out["open"]) & (out["close"] < out["close"].shift(1))
     slope_up = out["ema_fast"] > out["ema_fast"].shift(p.slope_bars)
     slope_dn = out["ema_fast"] < out["ema_fast"].shift(p.slope_bars)
-    adx_ok = (~p.use_adx) | (out["adx"] >= p.adx_min)
-    macd_long = (~p.use_macd) | (
-        (out["macd_hist"] > 0) & (out["macd_hist"] > out["macd_hist"].shift(1))
+    adx_ok = out["adx"] >= p.adx_min if p.use_adx else pd.Series(True, index=out.index)
+    if p.use_macd:
+        macd_long = (out["macd_hist"] > 0) & (out["macd_hist"] > out["macd_hist"].shift(1))
+        macd_short = (out["macd_hist"] < 0) & (out["macd_hist"] < out["macd_hist"].shift(1))
+    else:
+        macd_long = macd_short = pd.Series(True, index=out.index)
+    chop_ok = out["chop"] <= p.chop_max if p.use_chop else pd.Series(True, index=out.index)
+    ema_gap = (out["ema_fast"] - out["ema_slow"]).abs() / out["atr"].replace(0, np.nan)
+    ema_squeeze_ok = (
+        ema_gap >= p.ema_gap_min_atr if p.use_ema_squeeze else pd.Series(True, index=out.index)
     )
-    macd_short = (~p.use_macd) | (
-        (out["macd_hist"] < 0) & (out["macd_hist"] < out["macd_hist"].shift(1))
-    )
+    er_ok = out["er"] >= p.er_min if p.use_er else pd.Series(True, index=out.index)
+    if p.use_range_filter:
+        trend_market_ok = adx_ok & chop_ok & ema_squeeze_ok & er_ok
+    else:
+        trend_market_ok = pd.Series(True, index=out.index)
 
     if p.use_mtf:
         h1 = htf_bias(out, p.htf1_rule, p.htf_ema)
@@ -227,8 +270,8 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
         + (macd_short if p.use_macd else pd.Series(True, index=out.index)).astype(int)
     )
 
-    slope_long_ok = (~p.use_slope) | slope_up
-    slope_short_ok = (~p.use_slope) | slope_dn
+    slope_long_ok = slope_up if p.use_slope else pd.Series(True, index=out.index)
+    slope_short_ok = slope_dn if p.use_slope else pd.Series(True, index=out.index)
 
     raw_long = (
         bull
@@ -236,6 +279,7 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
         & bull_c
         & slope_long_ok
         & mtf_long
+        & trend_market_ok
         & (score_long >= p.min_score)
     )
     raw_short = (
@@ -244,6 +288,7 @@ def build_signals(df: pd.DataFrame, p: Params) -> pd.DataFrame:
         & bear_c
         & slope_short_ok
         & mtf_short
+        & trend_market_ok
         & (score_short >= p.min_score)
     )
 

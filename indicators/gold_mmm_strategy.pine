@@ -29,10 +29,19 @@ useHtf2      = input.bool(true, "啟用第二共振週期", group=grpMtf)
 htf2         = input.timeframe("D", "第二共振週期", group=grpMtf)
 htfEmaLen    = input.int(50, "高週期 EMA", minval=10, group=grpMtf)
 
-grpAdx = "④ 趨勢強度 ADX"
-useAdx       = input.bool(true, "啟用 ADX 過濾", group=grpAdx)
+grpAdx = "④ 盤整過濾（硬性）"
+useRangeFilter = input.bool(true, "啟用盤整過濾", group=grpAdx)
+useAdx       = input.bool(true, "ADX 過低視為盤整", group=grpAdx)
 adxLen       = input.int(14, "ADX 週期", minval=5, group=grpAdx)
-adxMin       = input.float(18.0, "最低 ADX", minval=5, step=0.5, group=grpAdx)
+adxMin       = input.float(20.0, "最低 ADX", minval=5, step=0.5, group=grpAdx)
+useChop      = input.bool(true, "Choppiness 過高視為盤整", group=grpAdx)
+chopLen      = input.int(14, "Choppiness 週期", minval=5, group=grpAdx)
+chopMax      = input.float(61.8, "Choppiness 上限", minval=38.0, maxval=80.0, step=0.1, group=grpAdx)
+useEmaSqueeze = input.bool(true, "均線糾結視為盤整", group=grpAdx)
+emaGapMinAtr = input.float(0.35, "快慢線最小間距（ATR 倍）", minval=0.05, step=0.05, group=grpAdx)
+useEr        = input.bool(true, "效率比過低視為盤整", group=grpAdx)
+erLen        = input.int(10, "效率比週期", minval=3, group=grpAdx)
+erMin        = input.float(0.25, "最低效率比", minval=0.05, maxval=1.0, step=0.05, group=grpAdx)
 
 grpMacd = "⑤ MACD 動能共振"
 useMacd      = input.bool(true, "啟用 MACD 共振", group=grpMacd)
@@ -104,6 +113,21 @@ adxOk = not useAdx or adxVal >= adxMin
 macdLongOk  = not useMacd or (macdHist > 0 and macdHist > macdHist[1])
 macdShortOk = not useMacd or (macdHist < 0 and macdHist < macdHist[1])
 
+atrSumChop = math.sum(ta.tr(true), chopLen)
+hiChop = ta.highest(high, chopLen)
+loChop = ta.lowest(low, chopLen)
+chopRange = hiChop - loChop
+chopVal = chopRange > 0 ? 100 * math.log10(atrSumChop / chopRange) / math.log10(chopLen) : 100.0
+chopOk = not useChop or chopVal <= chopMax
+emaGapAtr = atrVal > 0 ? math.abs(emaFast - emaSlow) / atrVal : 0.0
+emaSqueezeOk = not useEmaSqueeze or emaGapAtr >= emaGapMinAtr
+erMove = math.abs(close - close[erLen])
+erPath = math.sum(math.abs(close - close[1]), erLen)
+erVal = erPath > 0 ? erMove / erPath : 0.0
+erOk = not useEr or erVal >= erMin
+isRanging = useRangeFilter and not (adxOk and chopOk and emaSqueezeOk and erOk)
+trendMarketOk = not isRanging
+
 htf1Close = request.security(syminfo.tickerid, htf1, close, lookahead=barmerge.lookahead_off)
 htf1Ema   = request.security(syminfo.tickerid, htf1, ta.ema(close, htfEmaLen), lookahead=barmerge.lookahead_off)
 htf1Bull  = htf1Close > htf1Ema
@@ -138,8 +162,8 @@ scoreShort += (useMacd and macdShortOk) ? 1 : (useMacd ? 0 : 1)
 allowLong  = tradeMode != "只做空"
 allowShort = tradeMode != "只做多"
 
-longSignal  = allowLong and sessionOk and slopeLongOk and bullCandle and scoreLong >= minScore and mtfLongOk and pullbackLong and bullTrend
-shortSignal = allowShort and sessionOk and slopeShortOk and bearCandle and scoreShort >= minScore and mtfShortOk and pullbackShort and bearTrend
+longSignal  = allowLong and trendMarketOk and sessionOk and slopeLongOk and bullCandle and scoreLong >= minScore and mtfLongOk and pullbackLong and bullTrend
+shortSignal = allowShort and trendMarketOk and sessionOk and slopeShortOk and bearCandle and scoreShort >= minScore and mtfShortOk and pullbackShort and bearTrend
 
 var int lastLongBar  = na
 var int lastShortBar = na

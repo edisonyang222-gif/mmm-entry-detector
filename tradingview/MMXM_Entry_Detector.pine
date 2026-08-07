@@ -7,26 +7,62 @@ indicator("MMXM 進場偵測器", overlay=true, max_labels_count=500, max_lines_
 // 時區無關（只看 OHLC）。禁止在函式內改全域變數（CE10088）。
 
 // ===== ICT 進場模型 =====
-string entryModel = input.string("ICT演算法", "進場模型", options=["MMXM第四階段", "ERT交易系統", "PO3派發進場", "ICT演算法"], group="ICT進場模型", tooltip="ICT演算法=Killzone+HTF+PO3+DOL+BSL/SSL+MMXM合流。多需先掃SSL、空需先掃BSL。")
+string entryModel = input.string("ICT演算法", "進場模型", options=["MMXM第四階段", "ERT交易系統", "PO3派發進場", "ICT演算法"], group="ICT進場模型", tooltip="ICT演算法=四大模組可勾選合流。請在「四大演算法模組」勾選要啟用的規則。")
 string entryFill  = input.string("中點CE", "進場參考價", options=["中點CE", "近端", "OTE62"], group="ICT進場模型", tooltip="中點CE=FVG 50%；近端=先碰到的FVG邊界；OTE62=位移腿 62% 回撤（若落在FVG內優先，否則用中點）")
 string entryTrigger = input.string("收K確認進場", "進場確認方式", options=["觸價可進場", "收K確認進場", "收K進入失衡區"], group="ICT進場模型", tooltip="觸價可進場=影線碰到即可（偏限價）；收K確認進場=碰到後收盤回到進場側；收K進入失衡區=收盤落入FVG內才算")
 bool   requireMss = input.bool(true, "需要結構突破MSS（收破累積區間）", group="ICT進場模型")
 bool   requireBullBearClose = input.bool(true, "收K確認時需同向收盤（多收陽/空收陰）", group="ICT進場模型")
 
-// ===== ICT 演算法（IPDA）=====
-bool   useAlgo = input.bool(true, "啟用ICT演算法合流", group="ICT演算法", tooltip="時間Killzone + HTF偏向 + PO3階段 + DOL方向 合流計分")
-string algoTz = input.string("America/New_York", "Killzone時區", options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Taipei", "UTC"], group="ICT演算法")
-bool   useLondonKz = input.bool(true, "倫敦Killzone 02–05", group="ICT演算法")
-bool   useNyKz = input.bool(true, "紐約Killzone 08–11", group="ICT演算法")
-bool   useSilverBullet = input.bool(true, "Silver Bullet 10–11", group="ICT演算法")
-bool   algoRequireKz = input.bool(true, "演算法進場需在Killzone內", group="ICT演算法")
-bool   algoRequirePo3Dist = input.bool(true, "演算法進場需PO3派發同向", group="ICT演算法")
-bool   algoRequireHtf = input.bool(true, "演算法進場需HTF同向", group="ICT演算法")
-bool   algoRequireDol = input.bool(true, "演算法進場需DOL同向", group="ICT演算法")
-int    algoMinScore = input.int(3, "最低合流分數", minval=1, maxval=6, group="ICT演算法", tooltip="時間/HTF/PO3/DOL/BSL·SSL/結構 各1分")
-bool   useIpda = input.bool(true, "啟用IPDA 20/40/60日區間", group="ICT演算法")
-bool   showIpdaLines = input.bool(false, "顯示IPDA高低線（可選）", group="ICT演算法")
-bool   showKzBg = input.bool(false, "Killzone背景提示（可選）", group="ICT演算法")
+// ===== 四大演算法模組（各自勾選啟用）=====
+bool useTimeAlgo = input.bool(true, "①時間演算法 Asia→Judas→London/NY", group="四大演算法模組", tooltip="亞洲區間 → Judas假突破 → 倫敦/紐約延續，才允許該方向進場")
+bool useLiqAlgo = input.bool(true, "②流動性演算法 BSL/SSL", group="四大演算法模組", tooltip="多需先掃SSL、空需先掃BSL，掃蕩後才允許進場")
+bool useDispAlgo = input.bool(true, "③位移演算法 CISD/MSS+FVG", group="四大演算法模組", tooltip="需 CISD 或 MSS，且位移腿出現 FVG 才算有效結構")
+bool useTargetAlgo = input.bool(true, "④目標演算法 未掃流動性/EQH-EQL/IPDA", group="四大演算法模組", tooltip="停利優先：下一未掃流動性 → EQH/EQL → IPDA對側")
+
+// ===== ①時間演算法 =====
+string timeTz = input.string("America/New_York", "時間演算法時區", options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Taipei", "UTC"], group="①時間演算法")
+int    asiaStartH = input.int(20, "Asia開始小時", minval=0, maxval=23, group="①時間演算法", tooltip="ICT常見：紐約20:00開始亞洲區間")
+int    asiaEndH = input.int(0, "Asia結束小時", minval=0, maxval=23, group="①時間演算法", tooltip="ICT常見：紐約00:00結束")
+int    judasStartH = input.int(2, "Judas視窗起", minval=0, maxval=23, group="①時間演算法")
+int    judasEndH = input.int(5, "Judas視窗迄", minval=0, maxval=23, group="①時間演算法")
+bool   timeRequireReclaim = input.bool(true, "Judas需收回收復Asia邊", group="①時間演算法")
+bool   timeContLondon = input.bool(true, "延續允許倫敦KZ 02–05", group="①時間演算法")
+bool   timeContNy = input.bool(true, "延續允許紐約KZ 08–11", group="①時間演算法")
+bool   showAsiaBox = input.bool(false, "顯示Asia區間（可選）", group="①時間演算法")
+
+// ===== ②流動性演算法 BSL / SSL =====
+int    liqPivotLen = input.int(5, "流動性樞紐左右根數", minval=2, maxval=20, group="②流動性演算法BSL/SSL", tooltip="樞紐高低點形成 BSL/SSL 池")
+int    liqMaxLevels = input.int(8, "追蹤流動性池數量", minval=2, maxval=30, group="②流動性演算法BSL/SSL")
+int    liqValidBars = input.int(50, "掃蕩有效根數", minval=5, maxval=300, group="②流動性演算法BSL/SSL", tooltip="掃蕩後超過此根數未進場則失效")
+bool   liqRequireReclaim = input.bool(true, "掃蕩後需收回收復水位", group="②流動性演算法BSL/SSL", tooltip="影線掃破後收盤收回水位才算有效掃蕩（Judas）")
+bool   liqClearOpposite = input.bool(true, "新掃蕩清除對側狀態", group="②流動性演算法BSL/SSL")
+bool   showLiqSweepMark = input.bool(false, "顯示掃蕩標記（可選）", group="②流動性演算法BSL/SSL")
+
+// ===== ③位移演算法 =====
+bool   dispNeedCisd = input.bool(true, "接受CISD作為結構切換", group="③位移演算法", tooltip="Change in State of Delivery")
+bool   dispNeedMss = input.bool(true, "接受MSS作為結構切換", group="③位移演算法", tooltip="收破累積區間")
+bool   dispRequireFvg = input.bool(true, "位移腿必須出現FVG", group="③位移演算法")
+int    dispFvgMaxBars = input.int(3, "位移後最多幾根內出FVG", minval=1, maxval=10, group="③位移演算法")
+
+// ===== ④目標演算法 =====
+string targetPriority = input.string("未掃流動性→EQ→IPDA", "目標優先序", options=["未掃流動性→EQ→IPDA", "僅未掃流動性", "僅EQH/EQL", "僅IPDA對側"], group="④目標演算法")
+float  eqTolAtr = input.float(0.15, "EQH/EQL容差（×ATR）", minval=0.01, step=0.05, group="④目標演算法")
+bool   targetRequireLevel = input.bool(false, "進場需已算出演算法目標", group="④目標演算法", tooltip="開啟後：找不到未掃/EQ/IPDA目標則不進場")
+
+// ===== ICT 合流（Killzone / IPDA / 計分）=====
+bool   useAlgo = input.bool(true, "啟用ICT合流計分", group="ICT合流", tooltip="Killzone + HTF + PO3 + 模組狀態 合流計分（可與四大模組並用）")
+string algoTz = input.string("America/New_York", "Killzone時區", options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Taipei", "UTC"], group="ICT合流")
+bool   useLondonKz = input.bool(true, "倫敦Killzone 02–05", group="ICT合流")
+bool   useNyKz = input.bool(true, "紐約Killzone 08–11", group="ICT合流")
+bool   useSilverBullet = input.bool(true, "Silver Bullet 10–11", group="ICT合流")
+bool   algoRequireKz = input.bool(false, "合流進場需在Killzone內", group="ICT合流", tooltip="時間細節改由①時間演算法模組控制時可關閉")
+bool   algoRequirePo3Dist = input.bool(false, "合流進場需PO3派發同向", group="ICT合流")
+bool   algoRequireHtf = input.bool(true, "合流進場需HTF同向", group="ICT合流")
+bool   algoRequireDol = input.bool(false, "合流進場需舊DOL同向", group="ICT合流")
+int    algoMinScore = input.int(2, "最低合流分數", minval=1, maxval=8, group="ICT合流", tooltip="各模組/條件各1分")
+bool   useIpda = input.bool(true, "啟用IPDA 20/40/60日區間", group="ICT合流")
+bool   showIpdaLines = input.bool(false, "顯示IPDA高低線（可選）", group="ICT合流")
+bool   showKzBg = input.bool(false, "Killzone背景提示（可選）", group="ICT合流")
 
 // ===== PO3 Power of Three（AMD）=====
 bool   usePo3 = input.bool(true, "啟用PO3（AMD）判別", group="PO3 Power of Three", tooltip="Accumulation累積 → Manipulation操控(Judas) → Distribution派發")
@@ -45,16 +81,6 @@ string htfBiasMode = input.string("結構突破BOS", "HTF偏向判定", options=
 int    htfSwingLen = input.int(10, "HTF結構回看根數", minval=3, group="HTF→LTF多週期")
 int    htfEmaLen = input.int(20, "HTF EMA週期", minval=2, group="HTF→LTF多週期")
 bool   htfAllowFlat = input.bool(false, "HTF中性時仍允許進場", group="HTF→LTF多週期", tooltip="關閉=中性時不出訊號（較嚴）")
-
-// ===== 流動性演算法 BSL / SSL =====
-bool   useLiqAlgo = input.bool(true, "啟用BSL/SSL流動性演算法", group="流動性演算法BSL/SSL", tooltip="多單需先掃SSL、空單需先掃BSL，掃蕩後才允許進場")
-int    liqPivotLen = input.int(5, "流動性樞紐左右根數", minval=2, maxval=20, group="流動性演算法BSL/SSL", tooltip="樞紐高低點形成 BSL/SSL 池")
-int    liqMaxLevels = input.int(8, "追蹤流動性池數量", minval=2, maxval=30, group="流動性演算法BSL/SSL")
-int    liqValidBars = input.int(50, "掃蕩有效根數", minval=5, maxval=300, group="流動性演算法BSL/SSL", tooltip="掃蕩後超過此根數未進場則失效")
-bool   liqRequireReclaim = input.bool(true, "掃蕩後需收回收復水位", group="流動性演算法BSL/SSL", tooltip="影線掃破後收盤收回水位才算有效掃蕩（Judas）")
-bool   liqFilterEntry = input.bool(true, "進場需先掃對側流動性", group="流動性演算法BSL/SSL", tooltip="多=SSL已掃；空=BSL已掃。ICT演算法模式自動啟用")
-bool   liqClearOpposite = input.bool(true, "新掃蕩清除對側狀態", group="流動性演算法BSL/SSL")
-bool   showLiqSweepMark = input.bool(false, "顯示掃蕩標記（可選）", group="流動性演算法BSL/SSL")
 
 // ===== ERL / IRL 流動性路徑 =====
 bool   useErlIrl = input.bool(true, "啟用ERL↔IRL判別", group="ERL/IRL流動性", tooltip="偵測 Dealing Range 外部流動性(ERL)與內部流動性(IRL)，判斷目前往哪邊抽")
@@ -104,7 +130,10 @@ bool isAlgoMode = entryModel == "ICT演算法"
 bool htfFilterOn = useHtfFilter or (isErtMode and ertRequireHtf) or isPo3Mode or (isAlgoMode and algoRequireHtf)
 bool po3FilterOn = usePo3 and (po3Filter or isPo3Mode or (isAlgoMode and algoRequirePo3Dist))
 bool algoFilterOn = useAlgo and isAlgoMode
-bool liqFilterOn = useLiqAlgo and (liqFilterEntry or isAlgoMode)
+bool liqFilterOn = useLiqAlgo
+bool timeFilterOn = useTimeAlgo
+bool dispFilterOn = useDispAlgo
+bool targetFilterOn = useTargetAlgo
 
 float atrVal = ta.atr(atrPeriod)
 
@@ -394,6 +423,139 @@ f_liqAge() =>
     else
         "池 " + str.tostring(array.size(bslPool)) + "H/" + str.tostring(array.size(sslPool)) + "L"
 
+// ----- ①時間演算法：Asia range → Judas swing → London/NY continuation -----
+f_inHourRange(int h, int h0, int h1) =>
+    h0 == h1 ? true : h0 < h1 ? (h >= h0 and h < h1) : (h >= h0 or h < h1)
+
+int hTime = hour(time, timeTz)
+int dayTime = year(time, timeTz) * 10000 + month(time, timeTz) * 100 + dayofmonth(time, timeTz)
+bool inAsiaSes = f_inHourRange(hTime, asiaStartH, asiaEndH)
+bool inJudasSes = f_inHourRange(hTime, judasStartH, judasEndH)
+bool inContSes = (timeContLondon and hTime >= 2 and hTime < 5) or (timeContNy and hTime >= 8 and hTime < 11)
+
+var int asiaDayKey = na
+var float asiaHi = float(na)
+var float asiaLo = float(na)
+var bool asiaFrozen = false
+var int judasDir = 0
+var bool timeContBuy = false
+var bool timeContSell = false
+var int asiaBoxLeft = na
+var box asiaBox = na
+bool asiaJustOpen = inAsiaSes and not inAsiaSes[1]
+
+if useTimeAlgo
+    if asiaJustOpen or (na(asiaHi) and inAsiaSes)
+        asiaDayKey := dayTime
+        asiaHi := high
+        asiaLo := low
+        asiaFrozen := false
+        judasDir := 0
+        timeContBuy := false
+        timeContSell := false
+        asiaBoxLeft := bar_index
+        asiaBox := na
+
+    if inAsiaSes and not na(asiaHi)
+        asiaHi := math.max(asiaHi, high)
+        asiaLo := math.min(asiaLo, low)
+        if showAsiaBox and not na(asiaBoxLeft)
+            if na(asiaBox)
+                asiaBox := box.new(asiaBoxLeft, asiaHi, bar_index, asiaLo, xloc=xloc.bar_index, bgcolor=color.new(#5c6bc0, 88), border_color=color.new(#3949ab, 50), border_width=1, text="Asia", text_size=size.tiny)
+            else
+                box.set_right(asiaBox, bar_index)
+                box.set_top(asiaBox, asiaHi)
+                box.set_bottom(asiaBox, asiaLo)
+    else if not na(asiaHi) and not na(asiaLo)
+        asiaFrozen := true
+        if showAsiaBox and not na(asiaBox)
+            box.set_right(asiaBox, bar_index)
+
+    // Judas：掃 Asia 高低後收回
+    if asiaFrozen and inJudasSes and not na(asiaHi) and not na(asiaLo)
+        bool sweepSsl = low < asiaLo and (not timeRequireReclaim or close > asiaLo)
+        bool sweepBsl = high > asiaHi and (not timeRequireReclaim or close < asiaHi)
+        if sweepSsl
+            judasDir := 1
+            timeContSell := false
+        else if sweepBsl
+            judasDir := -1
+            timeContBuy := false
+
+    // Continuation：Judas 後在倫敦/紐約往反方向延續
+    if asiaFrozen and inContSes and judasDir != 0 and not na(asiaHi) and not na(asiaLo)
+        float asiaMid = (asiaHi + asiaLo) * 0.5
+        if judasDir > 0 and close > asiaMid
+            timeContBuy := true
+        if judasDir < 0 and close < asiaMid
+            timeContSell := true
+
+f_timeAllows(bool isBuy) =>
+    if not timeFilterOn
+        true
+    else if not asiaFrozen or na(asiaHi)
+        false
+    else
+        isBuy ? timeContBuy : timeContSell
+
+f_timeStatus() =>
+    if not useTimeAlgo
+        "關閉"
+    else if not asiaFrozen or na(asiaHi)
+        inAsiaSes ? "Asia累積中" : "待Asia"
+    else if timeContBuy
+        "延續偏多"
+    else if timeContSell
+        "延續偏空"
+    else if judasDir > 0
+        "已Judas↓ 待延續"
+    else if judasDir < 0
+        "已Judas↑ 待延續"
+    else
+        "Asia完成 待Judas"
+
+// ----- ③位移：CISD 輔助 -----
+f_cisdBull() =>
+    float maxBearOpen = float(na)
+    int run = 0
+    for i = 1 to 5
+        if close[i] < open[i]
+            run += 1
+            maxBearOpen := na(maxBearOpen) ? open[i] : math.max(maxBearOpen, open[i])
+        else if run > 0
+            break
+    run >= 1 and not na(maxBearOpen) and close > maxBearOpen and close > open
+
+f_cisdBear() =>
+    float minBullOpen = float(na)
+    int run = 0
+    for i = 1 to 5
+        if close[i] > open[i]
+            run += 1
+            minBullOpen := na(minBullOpen) ? open[i] : math.min(minBullOpen, open[i])
+        else if run > 0
+            break
+    run >= 1 and not na(minBullOpen) and close < minBullOpen and close < open
+
+var bool bDispValid = false
+var bool sDispValid = false
+var string bDispTag = "-"
+var string sDispTag = "-"
+
+f_dispAllows(bool isBuy) =>
+    if not dispFilterOn
+        true
+    else
+        isBuy ? bDispValid : sDispValid
+
+f_dispStatus() =>
+    if not useDispAlgo
+        "關閉"
+    else
+        string b = bDispValid ? "多✓" + bDispTag : "多✗"
+        string s = sDispValid ? "空✓" + sDispTag : "空✗"
+        b + " / " + s
+
 // ----- PO3 Power of Three：Accumulation → Manipulation → Distribution -----
 // 視覺：累積區底色、操控區底色、派發前三角提示進場
 int PO3_OFF = 0
@@ -548,6 +710,164 @@ float ipdaNearLo = useIpda ? math.max(nz(ipda20L, -1e10), math.max(nz(ipda40L, -
 bool nearIpdaHi = useIpda and not na(ipdaNearHi) and ipdaNearHi < 1e10 and high >= ipdaNearHi
 bool nearIpdaLo = useIpda and not na(ipdaNearLo) and ipdaNearLo > -1e10 and low <= ipdaNearLo
 
+// ----- ④目標演算法：下一未掃流動性 / EQH-EQL / IPDA 對側 -----
+var float algoBuyTarget = float(na)
+var float algoSellTarget = float(na)
+var string algoBuyTargetTag = "-"
+var string algoSellTargetTag = "-"
+
+f_nearestAbove(float[] pool, float px) =>
+    float best = float(na)
+    int n = array.size(pool)
+    if n > 0
+        for i = 0 to n - 1
+            float lv = array.get(pool, i)
+            if lv > px and (na(best) or lv < best)
+                best := lv
+    best
+
+f_nearestBelow(float[] pool, float px) =>
+    float best = float(na)
+    int n = array.size(pool)
+    if n > 0
+        for i = 0 to n - 1
+            float lv = array.get(pool, i)
+            if lv < px and (na(best) or lv > best)
+                best := lv
+    best
+
+f_eqhLevel(float px) =>
+    // 兩個接近的樞紐高視為 EQH
+    float best = float(na)
+    int n = array.size(bslPool)
+    float tol = nz(atrVal, 0.0) * eqTolAtr
+    if n >= 2 and tol > 0.0
+        for i = 0 to n - 2
+            for j = i + 1 to n - 1
+                float a = array.get(bslPool, i)
+                float b = array.get(bslPool, j)
+                if math.abs(a - b) <= tol
+                    float eq = (a + b) * 0.5
+                    if eq > px and (na(best) or eq < best)
+                        best := eq
+    best
+
+f_eqlLevel(float px) =>
+    float best = float(na)
+    int n = array.size(sslPool)
+    float tol = nz(atrVal, 0.0) * eqTolAtr
+    if n >= 2 and tol > 0.0
+        for i = 0 to n - 2
+            for j = i + 1 to n - 1
+                float a = array.get(sslPool, i)
+                float b = array.get(sslPool, j)
+                if math.abs(a - b) <= tol
+                    float eq = (a + b) * 0.5
+                    if eq < px and (na(best) or eq > best)
+                        best := eq
+    best
+
+f_ipdaAbove(float px) =>
+    float best = float(na)
+    if useIpda
+        if not na(ipda20H) and ipda20H > px
+            best := ipda20H
+        if not na(ipda40H) and ipda40H > px and (na(best) or ipda40H < best)
+            best := ipda40H
+        if not na(ipda60H) and ipda60H > px and (na(best) or ipda60H < best)
+            best := ipda60H
+    best
+
+f_ipdaBelow(float px) =>
+    float best = float(na)
+    if useIpda
+        if not na(ipda20L) and ipda20L < px
+            best := ipda20L
+        if not na(ipda40L) and ipda40L < px and (na(best) or ipda40L > best)
+            best := ipda40L
+        if not na(ipda60L) and ipda60L < px and (na(best) or ipda60L > best)
+            best := ipda60L
+    best
+
+f_pickBuyTarget(float entry) =>
+    float unswept = f_nearestAbove(bslPool, entry)
+    float eqh = f_eqhLevel(entry)
+    float ipda = f_ipdaAbove(entry)
+    float chosen = float(na)
+    string tag = "-"
+    if targetPriority == "僅未掃流動性"
+        chosen := unswept
+        tag := na(chosen) ? "-" : "未掃BSL"
+    else if targetPriority == "僅EQH/EQL"
+        chosen := eqh
+        tag := na(chosen) ? "-" : "EQH"
+    else if targetPriority == "僅IPDA對側"
+        chosen := ipda
+        tag := na(chosen) ? "-" : "IPDA"
+    else
+        if not na(unswept)
+            chosen := unswept
+            tag := "未掃BSL"
+        else if not na(eqh)
+            chosen := eqh
+            tag := "EQH"
+        else if not na(ipda)
+            chosen := ipda
+            tag := "IPDA"
+    [chosen, tag]
+
+f_pickSellTarget(float entry) =>
+    float unswept = f_nearestBelow(sslPool, entry)
+    float eql = f_eqlLevel(entry)
+    float ipda = f_ipdaBelow(entry)
+    float chosen = float(na)
+    string tag = "-"
+    if targetPriority == "僅未掃流動性"
+        chosen := unswept
+        tag := na(chosen) ? "-" : "未掃SSL"
+    else if targetPriority == "僅EQH/EQL"
+        chosen := eql
+        tag := na(chosen) ? "-" : "EQL"
+    else if targetPriority == "僅IPDA對側"
+        chosen := ipda
+        tag := na(chosen) ? "-" : "IPDA"
+    else
+        if not na(unswept)
+            chosen := unswept
+            tag := "未掃SSL"
+        else if not na(eql)
+            chosen := eql
+            tag := "EQL"
+        else if not na(ipda)
+            chosen := ipda
+            tag := "IPDA"
+    [chosen, tag]
+
+if useTargetAlgo
+    [tBuy, tagBuy] = f_pickBuyTarget(close)
+    [tSell, tagSell] = f_pickSellTarget(close)
+    algoBuyTarget := tBuy
+    algoBuyTargetTag := tagBuy
+    algoSellTarget := tSell
+    algoSellTargetTag := tagSell
+else
+    algoBuyTarget := float(na)
+    algoSellTarget := float(na)
+    algoBuyTargetTag := "-"
+    algoSellTargetTag := "-"
+
+f_targetAllows(bool isBuy) =>
+    if not targetFilterOn or not targetRequireLevel
+        true
+    else
+        isBuy ? not na(algoBuyTarget) : not na(algoSellTarget)
+
+f_targetStatus() =>
+    if not useTargetAlgo
+        "關閉"
+    else
+        "多" + algoBuyTargetTag + " / 空" + algoSellTargetTag
+
 f_algoScore(bool isBuy) =>
     int sc = 0
     if inKillzone
@@ -558,37 +878,42 @@ f_algoScore(bool isBuy) =>
         sc += 1
     if useErlIrl and ((isBuy and dolDir > 0) or (not isBuy and dolDir < 0))
         sc += 1
-    // 流動性演算法分：多需已掃SSL、空需已掃BSL
+    if useTimeAlgo and f_timeAllows(isBuy)
+        sc += 1
     if useLiqAlgo and ((isBuy and sslSweptActive) or (not isBuy and bslSweptActive))
         sc += 1
-    // 結構分：有累積掃蕩或IPDA觸及
-    bool structOk = (isBuy ? (bPhase == WAIT or bPhase == ENT or nearIpdaLo) : (sPhase == WAIT or sPhase == ENT or nearIpdaHi))
-    if structOk
+    if useDispAlgo and ((isBuy and bDispValid) or (not isBuy and sDispValid))
+        sc += 1
+    if useTargetAlgo and ((isBuy and not na(algoBuyTarget)) or (not isBuy and not na(algoSellTarget)))
         sc += 1
     sc
 
+f_modulesPass(bool isBuy) =>
+    f_timeAllows(isBuy) and f_liqAllows(isBuy) and f_dispAllows(isBuy) and f_targetAllows(isBuy)
+
 f_algoPass(bool isBuy) =>
+    bool modOk = f_modulesPass(isBuy)
     if not useAlgo or not algoFilterOn
-        true
+        modOk
     else
         bool tOk = not algoRequireKz or inKillzone
         bool hOk = not algoRequireHtf or f_htfAllows(isBuy)
         bool pOk = not algoRequirePo3Dist or (usePo3 and po3Phase == PO3_DIST and ((isBuy and po3Dir > 0) or (not isBuy and po3Dir < 0)))
         bool dOk = not algoRequireDol or (useErlIrl and ((isBuy and dolDir > 0) or (not isBuy and dolDir < 0)))
-        bool lOk = f_liqAllows(isBuy)
         bool scoreOk = f_algoScore(isBuy) >= algoMinScore
-        tOk and hOk and pOk and dOk and lOk and scoreOk
+        modOk and tOk and hOk and pOk and dOk and scoreOk
 
 f_algoStatus() =>
-    if not useAlgo
+    if not useAlgo and not useTimeAlgo and not useLiqAlgo and not useDispAlgo and not useTargetAlgo
         "關閉"
     else
         int sb = f_algoScore(true)
         int ss = f_algoScore(false)
         int best = math.max(sb, ss)
         string side = sb > ss ? "偏多" : ss > sb ? "偏空" : "中性"
-        string gate = algoFilterOn ? (best >= algoMinScore ? "通過" : "等待") : "監控"
-        gate + " " + side + " " + str.tostring(best) + "/" + str.tostring(algoMinScore) + " · " + f_kzName()
+        bool modOk = f_modulesPass(true) or f_modulesPass(false)
+        string gate = not modOk ? "模組擋" : algoFilterOn and best < algoMinScore ? "等待" : "模組OK"
+        gate + " " + side + " " + str.tostring(best) + "/" + str.tostring(algoMinScore)
 
 f_entryLevel(bool isBuy, float top, float bot, float manip, float expExtreme) =>
     float proximal = isBuy ? bot : top
@@ -703,6 +1028,8 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bEntry := float(na)
         bSL := float(na)
         bTP := float(na)
+        bDispValid := false
+        bDispTag := "-"
 
     if bPhase == IDLE or bPhase == ACC
         if bPhase == ACC and bAccCount >= minAccBars and not na(bAccLo)
@@ -762,17 +1089,30 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
     else if bPhase == MAN
         if not na(bManip) and low < bManip
             bManip := low
-        bool mssOk = not requireMss or close > bAccHi
-        bool bullDisp = f_isDisp(true) and mssOk
+        bool mssHit = close > bAccHi
+        bool mssOk = not requireMss or mssHit
+        bool cisdOk = f_cisdBull()
+        bool structFlip = mssOk
+        if useDispAlgo
+            structFlip := (dispNeedMss and mssHit) or (dispNeedCisd and cisdOk)
+            if not dispNeedMss and not dispNeedCisd
+                structFlip := mssHit or cisdOk
+        bool bullDisp = f_isDisp(true) and structFlip
+        bool fvgNow = f_hasBullFvg()
         if bullDisp
             bPhase := EXP
             bExpBar := bar_index
             bExpExt := high
-            if f_hasBullFvg()
+            bDispValid := not useDispAlgo
+            bDispTag := (cisdOk ? "CISD" : "") + (mssHit ? (cisdOk ? "+MSS" : "MSS") : "")
+            if fvgNow
                 bFvgTop := f_bullFvgTop()
                 bFvgBot := f_bullFvgBot()
                 bFvgBar := bar_index
                 bFvgTime := time
+                if useDispAlgo
+                    bDispValid := true
+                    bDispTag := bDispTag + "+FVG"
         else if close < bAccLo - math.max(manipAtrMult * atrVal, bAccHi - bAccLo) * 1.5
             bPhase := INV
 
@@ -784,28 +1124,44 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
             bFvgBot := f_bullFvgBot()
             bFvgBar := bar_index
             bFvgTime := time
-        if not na(bFvgTop) and not na(bFvgBot) and not na(bManip)
-            float entry = f_entryLevel(true, bFvgTop, bFvgBot, bManip, bExpExt)
-            float sl = bManip - stopBufAtrMult * atrVal
-            float risk = entry - sl
-            float fixedTp = entry + risk * targetRR
-            float depth = bAccHi - bManip
-            float structTp = math.max(bAccHi + depth, bAccHi + (bAccHi - bAccLo))
-            float tp = fixedTp
-            if tpMode == "結構投射"
-                tp := structTp
-            else if tpMode == "兩者取遠"
-                tp := math.max(fixedTp, structTp)
-            float reward = tp - entry
-            float rr = risk > 0.0 ? reward / risk : 0.0
-            if risk > 0.0 and reward > 0.0 and rr >= minRR
-                bEntry := entry
-                bSL := sl
-                bTP := tp
-                bPhase := WAIT
-            else
+            if useDispAlgo and bar_index - bExpBar <= dispFvgMaxBars
+                bDispValid := true
+                bDispTag := bDispTag + "+FVG"
+        if useDispAlgo and dispRequireFvg and na(bFvgTop) and bar_index - bExpBar >= dispFvgMaxBars
+            bPhase := INV
+        else if not na(bFvgTop) and not na(bFvgBot) and not na(bManip)
+            if useDispAlgo and dispRequireFvg and not bDispValid
                 bPhase := INV
-        else if bar_index - bExpBar >= 3
+            else
+                float entry = f_entryLevel(true, bFvgTop, bFvgBot, bManip, bExpExt)
+                float sl = bManip - stopBufAtrMult * atrVal
+                float risk = entry - sl
+                float fixedTp = entry + risk * targetRR
+                float depth = bAccHi - bManip
+                float structTp = math.max(bAccHi + depth, bAccHi + (bAccHi - bAccLo))
+                float tp = fixedTp
+                if tpMode == "結構投射"
+                    tp := structTp
+                else if tpMode == "兩者取遠"
+                    tp := math.max(fixedTp, structTp)
+                if useTargetAlgo
+                    [tAlgo, tTag] = f_pickBuyTarget(entry)
+                    if not na(tAlgo) and tAlgo > entry
+                        tp := tAlgo
+                        algoBuyTarget := tAlgo
+                        algoBuyTargetTag := tTag
+                float reward = tp - entry
+                float rr = risk > 0.0 ? reward / risk : 0.0
+                if risk > 0.0 and reward > 0.0 and rr >= minRR and (not useDispAlgo or bDispValid or not dispRequireFvg)
+                    bEntry := entry
+                    bSL := sl
+                    bTP := tp
+                    bPhase := WAIT
+                    if not useDispAlgo
+                        bDispValid := true
+                else
+                    bPhase := INV
+        else if bar_index - bExpBar >= math.max(3, dispFvgMaxBars)
             bPhase := INV
 
     else if bPhase == WAIT
@@ -814,11 +1170,10 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close < bFvgBot
         if timedOut or stopped or fvgBroken
             bPhase := INV
-        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true) and f_dolAllows(true) and f_po3Allows(true) and f_liqAllows(true) and f_algoPass(true)
+        else if f_entryConfirmed(true, bEntry, bFvgTop, bFvgBot) and showBuy and f_htfAllows(true) and f_dolAllows(true) and f_po3Allows(true) and f_modulesPass(true) and f_algoPass(true)
             buySignal := true
             buyRR := f_registerSetup(true, bEntry, bSL, bTP, bFvgTop, bFvgBot, bAccHi, bAccLo, bAccStartBar, bFvgBar, entryTrigger)
             bPhase := ENT
-            // 進場後消耗本次 SSL 掃蕩狀態
             if useLiqAlgo
                 lastSslSweepBar := na
                 lastSslLevel := float(na)
@@ -839,6 +1194,8 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         sEntry := float(na)
         sSL := float(na)
         sTP := float(na)
+        sDispValid := false
+        sDispTag := "-"
 
     if sPhase == IDLE or sPhase == ACC
         if sPhase == ACC and sAccCount >= minAccBars and not na(sAccHi)
@@ -898,17 +1255,30 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
     else if sPhase == MAN
         if not na(sManip) and high > sManip
             sManip := high
-        bool mssOk = not requireMss or close < sAccLo
-        bool bearDisp = f_isDisp(false) and mssOk
+        bool mssHit = close < sAccLo
+        bool mssOk = not requireMss or mssHit
+        bool cisdOk = f_cisdBear()
+        bool structFlip = mssOk
+        if useDispAlgo
+            structFlip := (dispNeedMss and mssHit) or (dispNeedCisd and cisdOk)
+            if not dispNeedMss and not dispNeedCisd
+                structFlip := mssHit or cisdOk
+        bool bearDisp = f_isDisp(false) and structFlip
+        bool fvgNow = f_hasBearFvg()
         if bearDisp
             sPhase := EXP
             sExpBar := bar_index
             sExpExt := low
-            if f_hasBearFvg()
+            sDispValid := not useDispAlgo
+            sDispTag := (cisdOk ? "CISD" : "") + (mssHit ? (cisdOk ? "+MSS" : "MSS") : "")
+            if fvgNow
                 sFvgTop := f_bearFvgTop()
                 sFvgBot := f_bearFvgBot()
                 sFvgBar := bar_index
                 sFvgTime := time
+                if useDispAlgo
+                    sDispValid := true
+                    sDispTag := sDispTag + "+FVG"
         else if close > sAccHi + math.max(manipAtrMult * atrVal, sAccHi - sAccLo) * 1.5
             sPhase := INV
 
@@ -920,28 +1290,44 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
             sFvgBot := f_bearFvgBot()
             sFvgBar := bar_index
             sFvgTime := time
-        if not na(sFvgTop) and not na(sFvgBot) and not na(sManip)
-            float entry = f_entryLevel(false, sFvgTop, sFvgBot, sManip, sExpExt)
-            float sl = sManip + stopBufAtrMult * atrVal
-            float risk = sl - entry
-            float fixedTp = entry - risk * targetRR
-            float depth = sManip - sAccLo
-            float structTp = math.min(sAccLo - depth, sAccLo - (sAccHi - sAccLo))
-            float tp = fixedTp
-            if tpMode == "結構投射"
-                tp := structTp
-            else if tpMode == "兩者取遠"
-                tp := math.min(fixedTp, structTp)
-            float reward = entry - tp
-            float rr = risk > 0.0 ? reward / risk : 0.0
-            if risk > 0.0 and reward > 0.0 and rr >= minRR
-                sEntry := entry
-                sSL := sl
-                sTP := tp
-                sPhase := WAIT
-            else
+            if useDispAlgo and bar_index - sExpBar <= dispFvgMaxBars
+                sDispValid := true
+                sDispTag := sDispTag + "+FVG"
+        if useDispAlgo and dispRequireFvg and na(sFvgTop) and bar_index - sExpBar >= dispFvgMaxBars
+            sPhase := INV
+        else if not na(sFvgTop) and not na(sFvgBot) and not na(sManip)
+            if useDispAlgo and dispRequireFvg and not sDispValid
                 sPhase := INV
-        else if bar_index - sExpBar >= 3
+            else
+                float entry = f_entryLevel(false, sFvgTop, sFvgBot, sManip, sExpExt)
+                float sl = sManip + stopBufAtrMult * atrVal
+                float risk = sl - entry
+                float fixedTp = entry - risk * targetRR
+                float depth = sManip - sAccLo
+                float structTp = math.min(sAccLo - depth, sAccLo - (sAccHi - sAccLo))
+                float tp = fixedTp
+                if tpMode == "結構投射"
+                    tp := structTp
+                else if tpMode == "兩者取遠"
+                    tp := math.min(fixedTp, structTp)
+                if useTargetAlgo
+                    [tAlgoS, tTagS] = f_pickSellTarget(entry)
+                    if not na(tAlgoS) and tAlgoS < entry
+                        tp := tAlgoS
+                        algoSellTarget := tAlgoS
+                        algoSellTargetTag := tTagS
+                float reward = entry - tp
+                float rr = risk > 0.0 ? reward / risk : 0.0
+                if risk > 0.0 and reward > 0.0 and rr >= minRR and (not useDispAlgo or sDispValid or not dispRequireFvg)
+                    sEntry := entry
+                    sSL := sl
+                    sTP := tp
+                    sPhase := WAIT
+                    if not useDispAlgo
+                        sDispValid := true
+                else
+                    sPhase := INV
+        else if bar_index - sExpBar >= math.max(3, dispFvgMaxBars)
             sPhase := INV
 
     else if sPhase == WAIT
@@ -950,11 +1336,10 @@ if bar_index >= math.max(lookback, atrPeriod) and runModel
         bool fvgBroken = close > sFvgTop
         if timedOut or stopped or fvgBroken
             sPhase := INV
-        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false) and f_dolAllows(false) and f_po3Allows(false) and f_liqAllows(false) and f_algoPass(false)
+        else if f_entryConfirmed(false, sEntry, sFvgTop, sFvgBot) and showSell and f_htfAllows(false) and f_dolAllows(false) and f_po3Allows(false) and f_modulesPass(false) and f_algoPass(false)
             sellSignal := true
             sellRR := f_registerSetup(false, sEntry, sSL, sTP, sFvgTop, sFvgBot, sAccHi, sAccLo, sAccStartBar, sFvgBar, entryTrigger)
             sPhase := ENT
-            // 進場後消耗本次 BSL 掃蕩狀態
             if useLiqAlgo
                 lastBslSweepBar := na
                 lastBslLevel := float(na)
@@ -1057,52 +1442,61 @@ plotshape(showMarkers and showSell and sellSignal and isPo3Mode, title="PO3作�
 plotshape(showMarkers and showSell and sellSignal and isErtMode, title="ERT作空", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="E空")
 plotshape(showMarkers and showSell and sellSignal and not isErtMode and not isPo3Mode and not isAlgoMode, title="作空進場", style=shape.triangledown, location=location.abovebar, color=color.new(color.orange, 0), size=size.small, text="作空")
 
-// 右上表：演算法 + BSL/SSL + PO3 + 流動性 + 盈虧
-var table info = table.new(position.top_right, 2, 16, bgcolor=color.new(#111111, 15), border_width=1, border_color=color.gray)
+// 右上表：四大模組 + 盈虧
+var table info = table.new(position.top_right, 2, 18, bgcolor=color.new(#111111, 15), border_width=1, border_color=color.gray)
 if showInfoTable and barstate.islast
     color algoCol = algoFilterOn and math.max(f_algoScore(true), f_algoScore(false)) >= algoMinScore ? color.lime : color.orange
+    color timeCol = useTimeAlgo and (timeContBuy or timeContSell) ? color.lime : useTimeAlgo ? color.orange : color.gray
+    color liqCol = sslSweptActive ? color.teal : bslSweptActive ? color.orange : useLiqAlgo ? color.gray : color.gray
+    color dispCol = useDispAlgo and (bDispValid or sDispValid) ? color.lime : useDispAlgo ? color.orange : color.gray
+    color tgtCol = useTargetAlgo and (not na(algoBuyTarget) or not na(algoSellTarget)) ? color.lime : useTargetAlgo ? color.orange : color.gray
     color po3Col = po3Phase == PO3_DIST ? color.lime : po3Phase == PO3_MAN ? color.orange : po3Phase == PO3_ACC ? color.aqua : color.gray
     color dolCol = dolDir > 0 ? color.teal : dolDir < 0 ? color.orange : color.gray
-    color liqCol = sslSweptActive ? color.teal : bslSweptActive ? color.orange : color.gray
-    table.cell(info, 0, 0, "演算法", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 0, "合流", text_color=color.white, text_size=size.small)
     table.cell(info, 1, 0, f_algoStatus(), text_color=algoCol, text_size=size.small)
-    table.cell(info, 0, 1, "Killzone", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 1, f_kzName(), text_color=inKillzone ? color.lime : color.gray, text_size=size.tiny)
-    table.cell(info, 0, 2, "BSL/SSL", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 1, "①時間", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 1, f_timeStatus(), text_color=timeCol, text_size=size.small)
+    table.cell(info, 0, 2, "②流動性", text_color=color.white, text_size=size.small)
     table.cell(info, 1, 2, f_liqStatus(), text_color=liqCol, text_size=size.small)
-    table.cell(info, 0, 3, "掃蕩時效", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 3, f_liqAge(), text_color=liqCol, text_size=size.tiny)
-    table.cell(info, 0, 4, "PO3", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 4, f_po3Name(), text_color=po3Col, text_size=size.small)
-    table.cell(info, 0, 5, "路徑", text_color=color.white, text_size=size.small)
-    table.cell(info, 1, 5, f_dolPathName(), text_color=dolCol, text_size=size.small)
-    table.cell(info, 0, 6, "DOL", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 6, f_dolTargetName(), text_color=color.white, text_size=size.tiny)
-    table.cell(info, 0, 7, "E", text_color=color.aqua, text_size=size.small)
-    table.cell(info, 1, 7, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 8, "R", text_color=color.red, text_size=size.small)
-    table.cell(info, 1, 8, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 9, "T1", text_color=color.yellow, text_size=size.small)
-    table.cell(info, 1, 9, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 10, "T2", text_color=color.lime, text_size=size.small)
-    table.cell(info, 1, 10, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
-    table.cell(info, 0, 11, "RR", text_color=color.gray, text_size=size.small)
-    table.cell(info, 1, 11, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
-    table.cell(info, 0, 12, "HTF", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 0, 3, "③位移", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 3, f_dispStatus(), text_color=dispCol, text_size=size.small)
+    table.cell(info, 0, 4, "④目標", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 4, f_targetStatus(), text_color=tgtCol, text_size=size.small)
+    table.cell(info, 0, 5, "Killzone", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 5, f_kzName(), text_color=inKillzone ? color.lime : color.gray, text_size=size.tiny)
+    table.cell(info, 0, 6, "PO3", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 6, f_po3Name(), text_color=po3Col, text_size=size.small)
+    table.cell(info, 0, 7, "路徑", text_color=color.white, text_size=size.small)
+    table.cell(info, 1, 7, f_dolPathName(), text_color=dolCol, text_size=size.small)
+    table.cell(info, 0, 8, "E", text_color=color.aqua, text_size=size.small)
+    table.cell(info, 1, 8, not na(lastEntry) ? f_px(lastEntry) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 9, "R", text_color=color.red, text_size=size.small)
+    table.cell(info, 1, 9, not na(lastSl) ? f_px(lastSl) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 10, "T1", text_color=color.yellow, text_size=size.small)
+    table.cell(info, 1, 10, not na(lastT1) ? f_px(lastT1) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 11, "T2", text_color=color.lime, text_size=size.small)
+    table.cell(info, 1, 11, not na(lastTp) ? f_px(lastTp) : "-", text_color=color.white, text_size=size.small)
+    table.cell(info, 0, 12, "RR", text_color=color.gray, text_size=size.small)
+    table.cell(info, 1, 12, not na(lastRr) ? "1:" + str.tostring(lastRr, "#.##") : "-", text_color=color.lime, text_size=size.small)
+    table.cell(info, 0, 13, "HTF", text_color=color.gray, text_size=size.tiny)
     color htfCol = htfBias > 0 ? color.teal : htfBias < 0 ? color.orange : color.gray
-    table.cell(info, 1, 12, htfFilterOn ? f_htfName(htfBias) : "關", text_color=htfCol, text_size=size.tiny)
-    table.cell(info, 0, 13, "多階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 13, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
-    table.cell(info, 0, 14, "空階段", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 14, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
-    table.cell(info, 0, 15, "模型", text_color=color.gray, text_size=size.tiny)
-    table.cell(info, 1, 15, showErtChecklist ? entryModel : "-", text_color=color.aqua, text_size=size.tiny)
+    table.cell(info, 1, 13, htfFilterOn ? f_htfName(htfBias) : "關", text_color=htfCol, text_size=size.tiny)
+    table.cell(info, 0, 14, "多階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 14, f_phaseName(bPhase), text_color=color.teal, text_size=size.tiny)
+    table.cell(info, 0, 15, "空階段", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 15, f_phaseName(sPhase), text_color=color.orange, text_size=size.tiny)
+    table.cell(info, 0, 16, "掃蕩時效", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 16, f_liqAge(), text_color=liqCol, text_size=size.tiny)
+    table.cell(info, 0, 17, "模型", text_color=color.gray, text_size=size.tiny)
+    table.cell(info, 1, 17, showErtChecklist ? entryModel : "-", text_color=color.aqua, text_size=size.tiny)
 
 alertcondition(buySignal, "作多進場", "ICT 演算法/MMXM 作多進場")
 alertcondition(sellSignal, "作空進場", "ICT 演算法/MMXM 作空進場")
 alertcondition(po3TipBuy, "PO3派發進場多", "PO3 操控結束，派發前提示作多")
 alertcondition(po3TipSell, "PO3派發進場空", "PO3 操控結束，派發前提示作空")
 alertcondition(useAlgo and inKillzone, "Killzone開啟", "目前位於ICT Killzone")
+alertcondition(useTimeAlgo and timeContBuy, "時間延續多", "時間演算法：Asia Judas 後倫敦/紐約延續偏多")
+alertcondition(useTimeAlgo and timeContSell, "時間延續空", "時間演算法：Asia Judas 後倫敦/紐約延續偏空")
 alertcondition(useLiqAlgo and sslSweepNow, "SSL掃蕩", "流動性演算法：已掃 SSL（偏多條件）")
 alertcondition(useLiqAlgo and bslSweepNow, "BSL掃蕩", "流動性演算法：已掃 BSL（偏空條件）")
 alertcondition(useErlIrl and dolPhase == 1 and dolDir != 0, "ERL→IRL", "流動性路徑：ERL→IRL")

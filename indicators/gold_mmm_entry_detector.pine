@@ -1,0 +1,139 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// Gold MMM Entry Detector
+// Multi-filter Momentum Method for XAUUSD / GOLD
+// Tuned for H4 / D1 — trend pullback with volatility + session filters
+
+//@version=5
+indicator("Gold MMM Entry Detector", shorttitle="Gold MMM", overlay=true, max_labels_count=500)
+
+// ═══════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════
+grpTrend = "Trend Filter"
+emaFastLen   = input.int(20,  "Fast EMA", minval=5, group=grpTrend)
+emaSlowLen   = input.int(50,  "Slow EMA", minval=10, group=grpTrend)
+emaBiasLen   = input.int(100, "Bias EMA", minval=50, group=grpTrend)
+tradeMode    = input.string("Both", "Direction", options=["Both", "Long only", "Short only"], group=grpTrend)
+
+grpMom = "Momentum / Pullback"
+rsiLen       = input.int(14, "RSI Length", minval=2, group=grpMom)
+rsiBuyLow    = input.int(35, "Long RSI Zone Low",  minval=10, maxval=50, group=grpMom)
+rsiBuyHigh   = input.int(55, "Long RSI Zone High", minval=40, maxval=70, group=grpMom)
+rsiSellHigh  = input.int(65, "Short RSI Zone High", minval=50, maxval=90, group=grpMom)
+rsiSellLow   = input.int(45, "Short RSI Zone Low",  minval=30, maxval=60, group=grpMom)
+
+grpVol = "Volatility"
+atrLen       = input.int(14, "ATR Length", minval=1, group=grpVol)
+atrMaLen     = input.int(50, "ATR MA Length", minval=5, group=grpVol)
+minAtrMult   = input.float(0.6, "Min ATR / ATR-MA (avoid dead market)", minval=0.1, step=0.05, group=grpVol)
+maxAtrMult   = input.float(3.0, "Max ATR / ATR-MA (avoid news spikes)", minval=1.0, step=0.05, group=grpVol)
+
+grpRisk = "Risk / Targets"
+slAtrMult    = input.float(2.0, "Stop Loss (ATR ×)", minval=0.5, step=0.1, group=grpRisk)
+tp1AtrMult   = input.float(3.0, "TP1 (ATR ×)", minval=0.5, step=0.1, group=grpRisk)
+tp2AtrMult   = input.float(5.0, "TP2 (ATR ×)", minval=1.0, step=0.1, group=grpRisk)
+cooldownBars = input.int(6, "Signal cooldown (bars)", minval=1, group=grpRisk)
+
+grpSession = "Session Filter (exchange time)"
+useSession   = input.bool(false, "Only trade London / NY sessions", group=grpSession, tooltip="Recommended OFF on H4/D1. Turn ON for H1.")
+londonSess   = input.session("0700-1600", "London", group=grpSession)
+nySess       = input.session("1300-2100", "New York", group=grpSession)
+
+grpAlert = "Alerts / Display"
+showLevels   = input.bool(true, "Show SL / TP on signal bar", group=grpAlert)
+showBg       = input.bool(true, "Color background by bias", group=grpAlert)
+
+// ═══════════════════════════════════════════════════════════
+// CALCULATIONS
+// ═══════════════════════════════════════════════════════════
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+emaBias = ta.ema(close, emaBiasLen)
+rsi     = ta.rsi(close, rsiLen)
+atr     = ta.atr(atrLen)
+atrMa   = ta.sma(atr, atrMaLen)
+
+bullTrend = emaFast > emaSlow and close > emaBias
+bearTrend = emaFast < emaSlow and close < emaBias
+
+volOk = atrMa > 0 and atr / atrMa >= minAtrMult and atr / atrMa <= maxAtrMult
+
+inLondon = not na(time(timeframe.period, londonSess))
+inNY     = not na(time(timeframe.period, nySess))
+sessionOk = not useSession or inLondon or inNY
+
+pullbackLong  = low <= emaFast * 1.001 and close > emaFast
+pullbackShort = high >= emaFast * 0.999 and close < emaFast
+
+rsiLongOk  = rsi >= rsiBuyLow and rsi <= rsiBuyHigh
+rsiShortOk = rsi <= rsiSellHigh and rsi >= rsiSellLow
+
+bullCandle = close > open and close > close[1]
+bearCandle = close < open and close < close[1]
+
+allowLong  = tradeMode != "Short only"
+allowShort = tradeMode != "Long only"
+
+longSignal  = allowLong  and bullTrend and pullbackLong and rsiLongOk and volOk and sessionOk and bullCandle
+shortSignal = allowShort and bearTrend and pullbackShort and rsiShortOk and volOk and sessionOk and bearCandle
+
+var int lastLongBar  = na
+var int lastShortBar = na
+longFire  = longSignal  and (na(lastLongBar)  or bar_index - lastLongBar  >= cooldownBars)
+shortFire = shortSignal and (na(lastShortBar) or bar_index - lastShortBar >= cooldownBars)
+
+if longFire
+    lastLongBar := bar_index
+if shortFire
+    lastShortBar := bar_index
+
+longSL  = close - atr * slAtrMult
+longTP1 = close + atr * tp1AtrMult
+longTP2 = close + atr * tp2AtrMult
+shortSL  = close + atr * slAtrMult
+shortTP1 = close - atr * tp1AtrMult
+shortTP2 = close - atr * tp2AtrMult
+
+rr1 = slAtrMult > 0 ? tp1AtrMult / slAtrMult : na
+rr2 = slAtrMult > 0 ? tp2AtrMult / slAtrMult : na
+
+// ═══════════════════════════════════════════════════════════
+// PLOTS
+// ═══════════════════════════════════════════════════════════
+plot(emaFast, "EMA Fast", color=color.new(#2E7D32, 0), linewidth=2)
+plot(emaSlow, "EMA Slow", color=color.new(#C62828, 0), linewidth=2)
+plot(emaBias, "EMA Bias", color=color.new(#546E7A, 30), linewidth=2)
+
+plotshape(longFire,  title="Long",  style=shape.triangleup,   location=location.belowbar, color=color.new(#00C853, 0), size=size.small, text="LONG")
+plotshape(shortFire, title="Short", style=shape.triangledown, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small, text="SHORT")
+
+bgcolor(showBg ? (bullTrend ? color.new(#1B5E20, 94) : bearTrend ? color.new(#B71C1C, 94) : na) : na)
+
+if showLevels and longFire
+    label.new(bar_index, low, "SL " + str.tostring(longSL, format.mintick) + "\nTP1 " + str.tostring(longTP1, format.mintick) + "\nTP2 " + str.tostring(longTP2, format.mintick), style=label.style_label_up, color=color.new(#00C853, 20), textcolor=color.white, size=size.small)
+if showLevels and shortFire
+    label.new(bar_index, high, "SL " + str.tostring(shortSL, format.mintick) + "\nTP1 " + str.tostring(shortTP1, format.mintick) + "\nTP2 " + str.tostring(shortTP2, format.mintick), style=label.style_label_down, color=color.new(#FF1744, 20), textcolor=color.white, size=size.small)
+
+alertcondition(longFire,  title="Gold MMM Long",  message="Gold MMM LONG | {{ticker}} @ {{close}}")
+alertcondition(shortFire, title="Gold MMM Short", message="Gold MMM SHORT | {{ticker}} @ {{close}}")
+alertcondition(longFire or shortFire, title="Gold MMM Any Entry", message="Gold MMM ENTRY | {{ticker}} @ {{close}}")
+
+var table dash = table.new(position.top_right, 2, 7, bgcolor=color.new(#102027, 20), border_width=1)
+if barstate.islast
+    table.cell(dash, 0, 0, "Gold MMM", text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, "H4/D1", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 0, 1, "Bias", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 1, bullTrend ? "BULL" : bearTrend ? "BEAR" : "RANGE", text_color=bullTrend ? color.lime : bearTrend ? color.red : color.orange, text_size=size.small)
+    table.cell(dash, 0, 2, "RSI", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 2, str.tostring(rsi, "#.1"), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 3, "ATR%", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 3, atrMa > 0 ? str.tostring(atr / atrMa * 100, "#.0") + "%" : "-", text_color=volOk ? color.lime : color.orange, text_size=size.small)
+    table.cell(dash, 0, 4, "Session", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 4, sessionOk ? "OK" : "OFF", text_color=sessionOk ? color.lime : color.red, text_size=size.small)
+    table.cell(dash, 0, 5, "R:R", text_color=color.gray, text_size=size.small)
+    table.cell(dash, 1, 5, "1:" + str.tostring(rr1, "#.1") + " / 1:" + str.tostring(rr2, "#.1"), text_color=color.white, text_size=size.small)
+    table.cell(dash, 0, 6, "Ready", text_color=color.gray, text_size=size.small)
+    readyTxt = longFire ? "LONG" : shortFire ? "SHORT" : "WAIT"
+    table.cell(dash, 1, 6, readyTxt, text_color=longFire ? color.lime : shortFire ? color.red : color.gray, text_size=size.small)

@@ -1,0 +1,106 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0
+// https://mozilla.org/MPL/2.0/
+//
+// Gold MMM Strategy — same logic as the indicator, for Strategy Tester
+// Recommended: XAUUSD / GOLD on H4 or D1
+
+//@version=5
+strategy("Gold MMM Strategy", shorttitle="Gold MMM Strat", overlay=true,
+     initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=5,
+     commission_type=strategy.commission.percent, commission_value=0.02,
+     slippage=2, pyramiding=0, calc_on_every_tick=false)
+
+grpTrend = "Trend Filter"
+emaFastLen   = input.int(20,  "Fast EMA", minval=5, group=grpTrend)
+emaSlowLen   = input.int(50,  "Slow EMA", minval=10, group=grpTrend)
+emaBiasLen   = input.int(100, "Bias EMA", minval=50, group=grpTrend)
+tradeMode    = input.string("Both", "Direction", options=["Both", "Long only", "Short only"], group=grpTrend)
+
+grpMom = "Momentum / Pullback"
+rsiLen       = input.int(14, "RSI Length", minval=2, group=grpMom)
+rsiBuyLow    = input.int(35, "Long RSI Zone Low",  minval=10, maxval=50, group=grpMom)
+rsiBuyHigh   = input.int(55, "Long RSI Zone High", minval=40, maxval=70, group=grpMom)
+rsiSellHigh  = input.int(65, "Short RSI Zone High", minval=50, maxval=90, group=grpMom)
+rsiSellLow   = input.int(45, "Short RSI Zone Low",  minval=30, maxval=60, group=grpMom)
+
+grpVol = "Volatility"
+atrLen       = input.int(14, "ATR Length", minval=1, group=grpVol)
+atrMaLen     = input.int(50, "ATR MA Length", minval=5, group=grpVol)
+minAtrMult   = input.float(0.6, "Min ATR / ATR-MA", minval=0.1, step=0.05, group=grpVol)
+maxAtrMult   = input.float(3.0, "Max ATR / ATR-MA", minval=1.0, step=0.05, group=grpVol)
+
+grpRisk = "Risk / Targets"
+slAtrMult    = input.float(2.0, "Stop Loss (ATR ×)", minval=0.5, step=0.1, group=grpRisk)
+tp1AtrMult   = input.float(3.0, "TP1 (ATR ×) — scale out 50%", minval=0.5, step=0.1, group=grpRisk)
+tp2AtrMult   = input.float(5.0, "TP2 (ATR ×) — runners", minval=1.0, step=0.1, group=grpRisk)
+cooldownBars = input.int(6, "Signal cooldown (bars)", minval=1, group=grpRisk)
+
+grpSession = "Session Filter"
+useSession   = input.bool(false, "Only trade London / NY sessions", group=grpSession)
+londonSess   = input.session("0700-1600", "London", group=grpSession)
+nySess       = input.session("1300-2100", "New York", group=grpSession)
+
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+emaBias = ta.ema(close, emaBiasLen)
+rsi     = ta.rsi(close, rsiLen)
+atr     = ta.atr(atrLen)
+atrMa   = ta.sma(atr, atrMaLen)
+
+bullTrend = emaFast > emaSlow and close > emaBias
+bearTrend = emaFast < emaSlow and close < emaBias
+volOk = atrMa > 0 and atr / atrMa >= minAtrMult and atr / atrMa <= maxAtrMult
+inLondon = not na(time(timeframe.period, londonSess))
+inNY     = not na(time(timeframe.period, nySess))
+sessionOk = not useSession or inLondon or inNY
+
+pullbackLong  = low <= emaFast * 1.001 and close > emaFast
+pullbackShort = high >= emaFast * 0.999 and close < emaFast
+rsiLongOk  = rsi >= rsiBuyLow and rsi <= rsiBuyHigh
+rsiShortOk = rsi <= rsiSellHigh and rsi >= rsiSellLow
+bullCandle = close > open and close > close[1]
+bearCandle = close < open and close < close[1]
+
+allowLong  = tradeMode != "Short only"
+allowShort = tradeMode != "Long only"
+
+longSignal  = allowLong  and bullTrend and pullbackLong and rsiLongOk and volOk and sessionOk and bullCandle
+shortSignal = allowShort and bearTrend and pullbackShort and rsiShortOk and volOk and sessionOk and bearCandle
+
+var int lastLongBar  = na
+var int lastShortBar = na
+longFire  = longSignal  and (na(lastLongBar)  or bar_index - lastLongBar  >= cooldownBars)
+shortFire = shortSignal and (na(lastShortBar) or bar_index - lastShortBar >= cooldownBars)
+
+if longFire
+    lastLongBar := bar_index
+if shortFire
+    lastShortBar := bar_index
+
+plot(emaFast, "EMA Fast", color=color.new(#2E7D32, 0), linewidth=2)
+plot(emaSlow, "EMA Slow", color=color.new(#C62828, 0), linewidth=2)
+plot(emaBias, "EMA Bias", color=color.new(#546E7A, 30), linewidth=2)
+plotshape(longFire,  style=shape.triangleup,   location=location.belowbar, color=color.new(#00C853, 0), size=size.small)
+plotshape(shortFire, style=shape.triangledown, location=location.abovebar, color=color.new(#FF1744, 0), size=size.small)
+
+longSL  = close - atr * slAtrMult
+longTP1 = close + atr * tp1AtrMult
+longTP2 = close + atr * tp2AtrMult
+shortSL  = close + atr * slAtrMult
+shortTP1 = close - atr * tp1AtrMult
+shortTP2 = close - atr * tp2AtrMult
+
+if longFire
+    strategy.entry("Long", strategy.long)
+    strategy.exit("L-TP1", from_entry="Long", qty_percent=50, stop=longSL, limit=longTP1)
+    strategy.exit("L-TP2", from_entry="Long", stop=longSL, limit=longTP2)
+
+if shortFire
+    strategy.entry("Short", strategy.short)
+    strategy.exit("S-TP1", from_entry="Short", qty_percent=50, stop=shortSL, limit=shortTP1)
+    strategy.exit("S-TP2", from_entry="Short", stop=shortSL, limit=shortTP2)
+
+if strategy.position_size > 0 and bearTrend
+    strategy.close("Long", comment="trend flip")
+if strategy.position_size < 0 and bullTrend
+    strategy.close("Short", comment="trend flip")

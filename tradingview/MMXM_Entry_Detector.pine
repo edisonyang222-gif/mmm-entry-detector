@@ -3,6 +3,7 @@ indicator("MMXM Entry Detector", overlay=true, max_labels_count=500, max_lines_c
 
 // ICT Market Maker Model — more conservative detection
 // Timezone-independent (OHLC only). Entry waits for Phase-4 FVG retrace.
+// Note: Pine forbids modifying globals inside functions (CE10088), so resets are inlined.
 
 int   lookback        = input.int(20, "Accumulation Lookback", minval=5, group="Detection")
 int   minAccBars      = input.int(5, "Min Bars In Accumulation", minval=2, group="Detection")
@@ -98,6 +99,18 @@ f_calcTp(bool isBuy, float accHi, float accLo, float manip) =>
         float depth = manip - accLo
         math.min(accLo - depth, accLo - (accHi - accLo))
 
+// Pure helper: create/update a pending box and return it (no global writes)
+f_updatePending(box pendingBox, bool isBuy, float top, float bot) =>
+    box out = pendingBox
+    if showPending and not na(top) and not na(bot)
+        if na(out)
+            out := box.new(bar_index, top, bar_index + 1, bot, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=isBuy ? "WAIT BUY" : "WAIT SELL", text_size=size.tiny, text_color=color.new(#f57f17, 0))
+        else
+            box.set_right(out, bar_index + 1)
+            box.set_top(out, top)
+            box.set_bottom(out, bot)
+    out
+
 f_drawSetup(bool isBuy, float entry, float sl, float tp, float fvgTop, float fvgBot, float accHi, float accLo, int accStartBar, int fvgBar) =>
     int x1 = bar_index
     int x2 = bar_index + boxBars
@@ -177,52 +190,6 @@ var float sellRR = float(na)
 buySignal := false
 sellSignal := false
 
-f_resetBuy() =>
-    bPhase := IDLE
-    bAccHi := float(na)
-    bAccLo := float(na)
-    bAccCount := 0
-    bManip := float(na)
-    bExpBar := 0
-    bFvgBar := 0
-    bFvgTop := float(na)
-    bFvgBot := float(na)
-    bEntry := float(na)
-    bSL := float(na)
-    bTP := float(na)
-    if not na(bPendingBox)
-        box.delete(bPendingBox)
-        bPendingBox := na
-
-f_resetSell() =>
-    sPhase := IDLE
-    sAccHi := float(na)
-    sAccLo := float(na)
-    sAccCount := 0
-    sManip := float(na)
-    sExpBar := 0
-    sFvgBar := 0
-    sFvgTop := float(na)
-    sFvgBot := float(na)
-    sEntry := float(na)
-    sSL := float(na)
-    sTP := float(na)
-    if not na(sPendingBox)
-        box.delete(sPendingBox)
-        sPendingBox := na
-
-f_updatePending(box pendingBox, bool isBuy, float top, float bot, float entry, float sl, float tp) =>
-    box out = pendingBox
-    if showPending and not na(top) and not na(bot)
-        if na(out)
-            out := box.new(bar_index, top, bar_index + 1, bot, bgcolor=pendingCol, border_color=color.new(#f9a825, 0), border_width=1, border_style=line.style_dashed, text=isBuy ? "WAIT BUY" : "WAIT SELL", text_size=size.tiny, text_color=color.new(#f57f17, 0))
-        else
-            box.set_right(out, bar_index + 1)
-            box.set_top(out, top)
-            box.set_bottom(out, bot)
-    out
-
-// Rolling candidate range ending at previous closed structure (current bar included for tightness check)
 float candHi = ta.highest(high, lookback)
 float candLo = ta.lowest(low, lookback)
 bool candTight = not na(atrVal) and atrVal > 0.0 and not na(candHi) and not na(candLo) and (candHi - candLo) <= maxRangeAtrMult * atrVal and (candHi - candLo) > 0.0
@@ -230,10 +197,23 @@ bool candTight = not na(atrVal) and atrVal > 0.0 and not na(candHi) and not na(c
 if bar_index >= math.max(lookback, atrPeriod)
     // ===================== BUY =====================
     if bPhase == ENT or bPhase == INV
-        f_resetBuy()
+        bPhase := IDLE
+        bAccHi := float(na)
+        bAccLo := float(na)
+        bAccCount := 0
+        bManip := float(na)
+        bExpBar := 0
+        bFvgBar := 0
+        bFvgTop := float(na)
+        bFvgBot := float(na)
+        bEntry := float(na)
+        bSL := float(na)
+        bTP := float(na)
+        if not na(bPendingBox)
+            box.delete(bPendingBox)
+            bPendingBox := na
 
     if bPhase == IDLE or bPhase == ACC
-        // Freeze range once we have enough tight bars; do not keep expanding with sweeps
         if bPhase == ACC and bAccCount >= minAccBars and not na(bAccLo)
             float sweepDepth = bAccLo - low
             float minSweep = math.max(manipAtrMult * atrVal, minSweepOfRange * (bAccHi - bAccLo))
@@ -241,10 +221,23 @@ if bar_index >= math.max(lookback, atrPeriod)
                 bPhase := MAN
                 bManip := low
             else if candTight
-                // keep frozen box; only refresh if still consolidating without sweep
                 bAccCount := bAccCount + 1
             else
-                f_resetBuy()
+                bPhase := IDLE
+                bAccHi := float(na)
+                bAccLo := float(na)
+                bAccCount := 0
+                bManip := float(na)
+                bExpBar := 0
+                bFvgBar := 0
+                bFvgTop := float(na)
+                bFvgBot := float(na)
+                bEntry := float(na)
+                bSL := float(na)
+                bTP := float(na)
+                if not na(bPendingBox)
+                    box.delete(bPendingBox)
+                    bPendingBox := na
         else if candTight
             if bPhase == IDLE or na(bAccLo)
                 bPhase := ACC
@@ -253,19 +246,31 @@ if bar_index >= math.max(lookback, atrPeriod)
                 bAccStart := bar_index - lookback + 1
                 bAccCount := lookback
             else
-                // lock the tighter early range; only shrink updates before freeze complete
                 bAccHi := math.min(bAccHi, candHi)
                 bAccLo := math.max(bAccLo, candLo)
-                // if shrink broke ordering, reset from candidate
                 if bAccHi <= bAccLo
                     bAccHi := candHi
                     bAccLo := candLo
                 bAccCount := bAccCount + 1
         else
-            f_resetBuy()
+            bPhase := IDLE
+            bAccHi := float(na)
+            bAccLo := float(na)
+            bAccCount := 0
+            bManip := float(na)
+            bExpBar := 0
+            bFvgBar := 0
+            bFvgTop := float(na)
+            bFvgBot := float(na)
+            bEntry := float(na)
+            bSL := float(na)
+            bTP := float(na)
+            if not na(bPendingBox)
+                box.delete(bPendingBox)
+                bPendingBox := na
 
     else if bPhase == MAN
-        if low < bManip
+        if not na(bManip) and low < bManip
             bManip := low
         bool mssOk = not requireMss or close > bAccHi
         bool bullDisp = f_isDisp(true) and mssOk
@@ -296,15 +301,14 @@ if bar_index >= math.max(lookback, atrPeriod)
                 bSL := sl
                 bTP := tp
                 bPhase := WAIT
-                bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, entry, sl, tp)
+                bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot)
             else
                 bPhase := INV
         else if bar_index - bExpBar >= 3
             bPhase := INV
 
     else if bPhase == WAIT
-        bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot, bEntry, bSL, bTP)
-        // Invalidate: close below SL, or close fully through distal against model, or timeout
+        bPendingBox := f_updatePending(bPendingBox, true, bFvgTop, bFvgBot)
         bool timedOut = bar_index - bFvgBar >= maxWaitBars
         bool stopped = close < bSL
         bool fvgBroken = close < bFvgBot
@@ -314,9 +318,7 @@ if bar_index >= math.max(lookback, atrPeriod)
                 box.delete(bPendingBox)
                 bPendingBox := na
         else
-            // Phase-4: wick taps into FVG (and optionally closes back above proximal/CE side)
-            bool tapped = low <= bFvgTop and low >= bFvgBot - (bFvgTop - bFvgBot) * 0.1
-            // also allow tap of CE specifically
+            bool tapped = low <= bFvgTop and high >= bFvgBot
             bool tappedCE = low <= bEntry and high >= bEntry
             bool tapOk = tapped or tappedCE
             bool closeOk = not requireCloseBack or close >= bEntry or close >= bFvgBot
@@ -330,7 +332,21 @@ if bar_index >= math.max(lookback, atrPeriod)
 
     // ===================== SELL =====================
     if sPhase == ENT or sPhase == INV
-        f_resetSell()
+        sPhase := IDLE
+        sAccHi := float(na)
+        sAccLo := float(na)
+        sAccCount := 0
+        sManip := float(na)
+        sExpBar := 0
+        sFvgBar := 0
+        sFvgTop := float(na)
+        sFvgBot := float(na)
+        sEntry := float(na)
+        sSL := float(na)
+        sTP := float(na)
+        if not na(sPendingBox)
+            box.delete(sPendingBox)
+            sPendingBox := na
 
     if sPhase == IDLE or sPhase == ACC
         if sPhase == ACC and sAccCount >= minAccBars and not na(sAccHi)
@@ -342,7 +358,21 @@ if bar_index >= math.max(lookback, atrPeriod)
             else if candTight
                 sAccCount := sAccCount + 1
             else
-                f_resetSell()
+                sPhase := IDLE
+                sAccHi := float(na)
+                sAccLo := float(na)
+                sAccCount := 0
+                sManip := float(na)
+                sExpBar := 0
+                sFvgBar := 0
+                sFvgTop := float(na)
+                sFvgBot := float(na)
+                sEntry := float(na)
+                sSL := float(na)
+                sTP := float(na)
+                if not na(sPendingBox)
+                    box.delete(sPendingBox)
+                    sPendingBox := na
         else if candTight
             if sPhase == IDLE or na(sAccHi)
                 sPhase := ACC
@@ -358,10 +388,24 @@ if bar_index >= math.max(lookback, atrPeriod)
                     sAccLo := candLo
                 sAccCount := sAccCount + 1
         else
-            f_resetSell()
+            sPhase := IDLE
+            sAccHi := float(na)
+            sAccLo := float(na)
+            sAccCount := 0
+            sManip := float(na)
+            sExpBar := 0
+            sFvgBar := 0
+            sFvgTop := float(na)
+            sFvgBot := float(na)
+            sEntry := float(na)
+            sSL := float(na)
+            sTP := float(na)
+            if not na(sPendingBox)
+                box.delete(sPendingBox)
+                sPendingBox := na
 
     else if sPhase == MAN
-        if high > sManip
+        if not na(sManip) and high > sManip
             sManip := high
         bool mssOk = not requireMss or close < sAccLo
         bool bearDisp = f_isDisp(false) and mssOk
@@ -392,14 +436,14 @@ if bar_index >= math.max(lookback, atrPeriod)
                 sSL := sl
                 sTP := tp
                 sPhase := WAIT
-                sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, entry, sl, tp)
+                sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot)
             else
                 sPhase := INV
         else if bar_index - sExpBar >= 3
             sPhase := INV
 
     else if sPhase == WAIT
-        sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot, sEntry, sSL, sTP)
+        sPendingBox := f_updatePending(sPendingBox, false, sFvgTop, sFvgBot)
         bool timedOut = bar_index - sFvgBar >= maxWaitBars
         bool stopped = close > sSL
         bool fvgBroken = close > sFvgTop
@@ -409,7 +453,7 @@ if bar_index >= math.max(lookback, atrPeriod)
                 box.delete(sPendingBox)
                 sPendingBox := na
         else
-            bool tapped = high >= sFvgBot and high <= sFvgTop + (sFvgTop - sFvgBot) * 0.1
+            bool tapped = high >= sFvgBot and low <= sFvgTop
             bool tappedCE = high >= sEntry and low <= sEntry
             bool tapOk = tapped or tappedCE
             bool closeOk = not requireCloseBack or close <= sEntry or close <= sFvgTop

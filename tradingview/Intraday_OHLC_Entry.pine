@@ -3,7 +3,8 @@ indicator("Intraday OHLC Entry", overlay=true, max_labels_count=500, max_lines_c
 
 // --- Inputs ---
 mode          = input.string("ALL", "Mode", options=["BREAKOUT", "REJECTION", "OPEN", "ALL"])
-sessionHour   = input.int(0, "Session day start hour", minval=0, maxval=23)
+sessionHour   = input.int(4, "交易日開始：時", minval=0, maxval=23)
+sessionMinute = input.int(45, "交易日開始：分", minval=0, maxval=59)
 orbBars       = input.int(4, "Opening range bars", minval=1)
 atrLen        = input.int(14, "ATR period")
 touchTolAtr   = input.float(0.05, "Touch tolerance (ATR)", step=0.01)
@@ -16,7 +17,9 @@ useLevelTP    = input.bool(true, "Prefer OHLC level TP")
 onePerDay     = input.bool(true, "One signal per day per side")
 showBuy       = input.bool(true, "Show buy")
 showSell      = input.bool(true, "Show sell")
-showLevels    = input.bool(true, "Show PDH/PDL/Open/ORB")
+showLevels    = input.bool(true, "顯示 PDH/PDL 等價格線")
+showSessionV  = input.bool(true, "每天開始畫黃色虛線（垂直）")
+showLevelLbl  = input.bool(true, "價格線標籤")
 
 enableBO  = mode == "BREAKOUT" or mode == "ALL"
 enableREJ = mode == "REJECTION" or mode == "ALL"
@@ -25,10 +28,10 @@ enableORB = mode == "BREAKOUT" or mode == "ALL"
 
 atr = ta.atr(atrLen)
 
-// Session day key (server/exchange time of chart)
-dayStart = timestamp(year, month, dayofmonth, sessionHour, 0)
-sessKey  = hour < sessionHour ? dayStart - 86400000 : dayStart
-newDay   = nz(ta.change(sessKey), 0) != 0
+//══ 交易日：預設每天 04:45 起算 ══
+sessToday = timestamp(year, month, dayofmonth, sessionHour, sessionMinute)
+sessKey   = time >= sessToday ? sessToday : sessToday - 86400000
+newDay    = nz(ta.change(sessKey), 0) != 0
 
 var float pdh = na
 var float pdl = na
@@ -44,7 +47,42 @@ var bool  orbReady = false
 var int   lastBuyDay = -1
 var int   lastSellDay = -1
 
+// 當日水平價格線（連續，非中斷 plot）
+var line lnPdh = na
+var line lnPdl = na
+var line lnMid = na
+var line lnDo  = na
+var line lnOrh = na
+var line lnOrl = na
+var line lnPdc = na
+var label lbPdh = na
+var label lbPdl = na
+var label lbDo  = na
+
+f_endPrevLines() =>
+    if not na(lnPdh)
+        line.set_x2(lnPdh, bar_index - 1)
+    if not na(lnPdl)
+        line.set_x2(lnPdl, bar_index - 1)
+    if not na(lnMid)
+        line.set_x2(lnMid, bar_index - 1)
+    if not na(lnDo)
+        line.set_x2(lnDo, bar_index - 1)
+    if not na(lnOrh)
+        line.set_x2(lnOrh, bar_index - 1)
+    if not na(lnOrl)
+        line.set_x2(lnOrl, bar_index - 1)
+    if not na(lnPdc)
+        line.set_x2(lnPdc, bar_index - 1)
+
+f_newHLine(float price, color col, int w) =>
+    line.new(bar_index, price, bar_index, price, xloc=xloc.bar_index, extend=extend.none, color=col, style=line.style_solid, width=w)
+
 if newDay
+    // 結束前一日水平線到昨日最後一根
+    f_endPrevLines()
+
+    // 滾動前一日 OHLC → 今日 PDH/PDL…
     pdh := dayHigh
     pdl := dayLow
     pdo := dayOpen
@@ -56,6 +94,25 @@ if newDay
     orbLow := low
     barsInDay := 1
     orbReady := orbBars <= 1
+
+    // 黃色虛線垂直分隔（每日 04:45）
+    if showSessionV
+        line.new(bar_index, low, bar_index, high, xloc=xloc.bar_index, extend=extend.both, color=color.yellow, style=line.style_dashed, width=1)
+
+    // 從本日開始畫水平價格線（到當日結束會一直延長）
+    if showLevels and not na(pdh) and not na(pdl)
+        float mid0 = (pdh + pdl) * 0.5
+        lnPdh := f_newHLine(pdh, color.teal, 2)
+        lnPdl := f_newHLine(pdl, color.maroon, 2)
+        lnMid := f_newHLine(mid0, color.gray, 1)
+        lnPdc := f_newHLine(pdc, color.silver, 1)
+        lnDo  := f_newHLine(dayOpen, color.orange, 2)
+        lnOrh := na
+        lnOrl := na
+        if showLevelLbl
+            lbPdh := label.new(bar_index, pdh, "PDH " + str.tostring(pdh, format.mintick), style=label.style_label_left, color=color.new(color.teal, 70), textcolor=color.teal, size=size.small)
+            lbPdl := label.new(bar_index, pdl, "PDL " + str.tostring(pdl, format.mintick), style=label.style_label_left, color=color.new(color.maroon, 70), textcolor=color.maroon, size=size.small)
+            lbDo  := label.new(bar_index, dayOpen, "Open " + str.tostring(dayOpen, format.mintick), style=label.style_label_left, color=color.new(color.orange, 70), textcolor=color.orange, size=size.small)
 else
     dayHigh := math.max(nz(dayHigh, high), high)
     dayLow := math.min(nz(dayLow, low), low)
@@ -65,6 +122,55 @@ else
         orbLow := math.min(nz(orbLow, low), low)
         if barsInDay >= orbBars
             orbReady := true
+            // ORB 完成後才畫 ORH/ORL 水平線（從本日開始到結束）
+            if showLevels
+                // 從 session 起點接線：用目前 bar 往回不方便，改從當前畫起並可接受；
+                // 為完整「從 04:45 開始」，ORB 線從本日第一根延伸：用 line.get_x1(lnDo)
+                int x1 = not na(lnDo) ? line.get_x1(lnDo) : bar_index
+                lnOrh := line.new(x1, orbHigh, bar_index, orbHigh, xloc=xloc.bar_index, extend=extend.none, color=color.aqua, style=line.style_solid, width=1)
+                lnOrl := line.new(x1, orbLow, bar_index, orbLow, xloc=xloc.bar_index, extend=extend.none, color=color.fuchsia, style=line.style_solid, width=1)
+
+// 當日水平線延長到目前K（連續價格線，不斷裂）
+if showLevels
+    if not na(lnPdh)
+        line.set_x2(lnPdh, bar_index)
+        line.set_y1(lnPdh, pdh)
+        line.set_y2(lnPdh, pdh)
+    if not na(lnPdl)
+        line.set_x2(lnPdl, bar_index)
+        line.set_y1(lnPdl, pdl)
+        line.set_y2(lnPdl, pdl)
+    if not na(lnMid) and not na(pdh) and not na(pdl)
+        float midNow = (pdh + pdl) * 0.5
+        line.set_x2(lnMid, bar_index)
+        line.set_y1(lnMid, midNow)
+        line.set_y2(lnMid, midNow)
+    if not na(lnPdc)
+        line.set_x2(lnPdc, bar_index)
+        line.set_y1(lnPdc, pdc)
+        line.set_y2(lnPdc, pdc)
+    if not na(lnDo)
+        line.set_x2(lnDo, bar_index)
+        line.set_y1(lnDo, dayOpen)
+        line.set_y2(lnDo, dayOpen)
+    if not na(lnOrh)
+        line.set_x2(lnOrh, bar_index)
+        line.set_y1(lnOrh, orbHigh)
+        line.set_y2(lnOrh, orbHigh)
+    if not na(lnOrl)
+        line.set_x2(lnOrl, bar_index)
+        line.set_y1(lnOrl, orbLow)
+        line.set_y2(lnOrl, orbLow)
+    // 標籤跟著右側
+    if showLevelLbl and not na(lbPdh)
+        label.set_x(lbPdh, bar_index)
+        label.set_y(lbPdh, pdh)
+    if showLevelLbl and not na(lbPdl)
+        label.set_x(lbPdl, bar_index)
+        label.set_y(lbPdl, pdl)
+    if showLevelLbl and not na(lbDo)
+        label.set_x(lbDo, bar_index)
+        label.set_y(lbDo, dayOpen)
 
 float mid = not na(pdh) and not na(pdl) ? (pdh + pdl) * 0.5 : na
 levelsReady = not na(pdh) and not na(pdl)
@@ -105,7 +211,6 @@ var float sigSL = na
 var float sigTP = na
 
 if barstate.isconfirmed and levelsReady and atr > 0 and not earlyBar
-    // PDH breakout
     if enableBO and allowBuy and close[1] <= pdh + tol and close > pdh + brk
         meas = close + (pdh - pdl)
         [ok, sl, tp, rr] = f_plan(true, close, pdh, meas)
@@ -116,7 +221,6 @@ if barstate.isconfirmed and levelsReady and atr > 0 and not earlyBar
             sigSL := sl
             sigTP := tp
             lastBuyDay := dayId
-    // PDL breakout
     if not buySignal and enableBO and allowSell and close[1] >= pdl - tol and close < pdl - brk
         meas = close - (pdh - pdl)
         [ok, sl, tp, rr] = f_plan(false, close, pdl, meas)
@@ -127,7 +231,6 @@ if barstate.isconfirmed and levelsReady and atr > 0 and not earlyBar
             sigSL := sl
             sigTP := tp
             lastSellDay := dayId
-    // Open cross
     if not buySignal and not sellSignal and enableOPN
         if allowBuy and close[1] <= dayOpen + tol and close > dayOpen + brk
             structLvl = mid > close ? mid : pdh
@@ -149,7 +252,6 @@ if barstate.isconfirmed and levelsReady and atr > 0 and not earlyBar
                 sigSL := sl
                 sigTP := tp
                 lastSellDay := dayId
-    // Rejection
     if not buySignal and not sellSignal and enableREJ and rng > 0 and body / rng >= rejectBody
         if allowSell and high >= pdh - tol and close < pdh - brk and close < open
             structLvl = mid < close ? mid : pdl
@@ -171,7 +273,6 @@ if barstate.isconfirmed and levelsReady and atr > 0 and not earlyBar
                 sigSL := sl
                 sigTP := tp
                 lastBuyDay := dayId
-    // ORB
     if not buySignal and not sellSignal and enableORB and orbReady and barsInDay > orbBars
         if allowBuy and close[1] <= orbHigh + tol and close > orbHigh + brk
             [ok, sl, tp, rr] = f_plan(true, close, orbHigh, pdh)
@@ -194,13 +295,6 @@ if barstate.isconfirmed and levelsReady and atr > 0 and not earlyBar
 
 plotshape(showBuy and buySignal, title="Buy", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="B")
 plotshape(showSell and sellSignal, title="Sell", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="S")
-
-plot(showLevels and levelsReady ? pdh : na, "PDH", color=color.teal, style=plot.style_linebr)
-plot(showLevels and levelsReady ? pdl : na, "PDL", color=color.maroon, style=plot.style_linebr)
-plot(showLevels and levelsReady ? mid : na, "MID", color=color.gray, style=plot.style_linebr)
-plot(showLevels ? dayOpen : na, "DayOpen", color=color.orange, style=plot.style_linebr, linewidth=2)
-plot(showLevels and orbReady ? orbHigh : na, "ORH", color=color.aqua, style=plot.style_linebr)
-plot(showLevels and orbReady ? orbLow : na, "ORL", color=color.fuchsia, style=plot.style_linebr)
 
 if buySignal or sellSignal
     label.new(bar_index, buySignal ? low : high, sigType, style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.tiny)

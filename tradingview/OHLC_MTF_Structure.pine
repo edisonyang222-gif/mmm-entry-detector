@@ -7,7 +7,6 @@ indicator("OHLC多時框結構進場", overlay=true, max_labels_count=500, max_l
 grpTF   = "時框"
 htfTF   = input.timeframe("60",  "高週期（趨勢）", group=grpTF)
 mtfTF   = input.timeframe("15",  "中週期（結構）", group=grpTF)
-// 低週期 = 當前圖表
 
 grpStr  = "結構參數"
 swingLen     = input.int(2, "擺盪左右K數", minval=1, group=grpStr)
@@ -26,15 +25,20 @@ onePerSetup  = input.bool(true, "同一掃除僅一次進場", group=grpStr)
 grpShow = "顯示"
 showPanel    = input.bool(true, "顯示中文面版", group=grpShow)
 showSR       = input.bool(true, "顯示有效支撐/阻力", group=grpShow)
-showSweep    = input.bool(true, "顯示流動性掃除", group=grpShow)
+showSweep    = input.bool(true, "顯示流動性掃除標記", group=grpShow)
 showBuy      = input.bool(true, "顯示買入訊號", group=grpShow)
 showSell     = input.bool(true, "顯示賣出訊號", group=grpShow)
 showPlan     = input.bool(true, "顯示進場/SL/TP", group=grpShow)
 sessionHour  = input.int(4, "日分隔：時", minval=0, maxval=23, group=grpShow)
 sessionMinute= input.int(45, "日分隔：分", minval=0, maxval=59, group=grpShow)
 showSessionV = input.bool(true, "每天開始畫黃色虛線（垂直）", group=grpShow)
+showLiqPool  = input.bool(true, "顯示流動性池數量", group=grpShow)
+liqTouchBars = input.int(3, "流動性量能回看K數", minval=1, maxval=20, group=grpShow)
+liqEqualAtr  = input.float(0.08, "同等高低合併ATR", step=0.01, group=grpShow)
+maxLiqPools  = input.int(40, "最多保留流動性池數", minval=5, maxval=100, group=grpShow)
 
 atr = ta.atr(atrLen)
+wickMin = sweepWickAtr * atr
 
 // 每天 04:45（可調）黃色虛線垂直分隔
 sessToday = timestamp(year, month, dayofmonth, sessionHour, sessionMinute)
@@ -43,25 +47,21 @@ newSess   = nz(ta.change(sessKey), 0) != 0
 if showSessionV and newSess
     line.new(bar_index, low, bar_index, high, xloc=xloc.bar_index, extend=extend.both, color=color.yellow, style=line.style_dashed, width=1)
 
-//══════════════════════════════════════════════════════════════
-// 工具：偏向文字
-//══════════════════════════════════════════════════════════════
 biasCN(int b) =>
     b == 1 ? "偏多 ▲" : b == -1 ? "偏空 ▼" : "盤整 ─"
-
 consensusCN(int b) =>
     b == 1 ? "大概率向上" : b == -1 ? "大概率向下" : "方向不明，觀望"
-
 biasColor(int b) =>
     b == 1 ? color.new(color.teal, 0) : b == -1 ? color.new(color.red, 0) : color.new(color.gray, 0)
+fmtVol(float v) =>
+    v >= 1000000 ? str.tostring(v / 1000000, "#.##") + "M" : v >= 1000 ? str.tostring(v / 1000, "#.#") + "K" : str.tostring(math.round(v))
 
 //══════════════════════════════════════════════════════════════
-// 擺盪結構偏向（已確認樞軸，不重繪）
+// 擺盪 / 多時框偏向
 //══════════════════════════════════════════════════════════════
 ph = ta.pivothigh(high, swingLen, swingLen)
 pl = ta.pivotlow(low, swingLen, swingLen)
 
-// 各時框獨立計算偏向（供 request.security 使用，避免吃到圖表全域狀態）
 tfBias() =>
     pHi = ta.pivothigh(high, swingLen, swingLen)
     pLo = ta.pivotlow(low, swingLen, swingLen)
@@ -88,48 +88,138 @@ tfBias() =>
     b
 
 ltfBias = tfBias()
-
-// 高/中週期偏向（收盤確認，不做超前）
 htfBias = nz(request.security(syminfo.tickerid, htfTF, tfBias(), barmerge.gaps_off, barmerge.lookahead_off), 0)
 mtfBias = nz(request.security(syminfo.tickerid, mtfTF, tfBias(), barmerge.gaps_off, barmerge.lookahead_off), 0)
-
-// 綜合偏向：HTF+MTF 同向最優先
 consensus =
      htfBias == mtfBias and htfBias != 0 ? htfBias :
      htfBias != 0 and mtfBias == 0 ? htfBias :
      htfBias == 0 and mtfBias != 0 ? mtfBias :
      htfBias != 0 and ltfBias == htfBias ? htfBias : 0
-
 reasonTxt =
      consensus == 1 ? "高週期與中週期結構偏多，優先找回踩做多" :
      consensus == -1 ? "高週期與中週期結構偏空，優先找回踩做空" :
      "多時框未對齊，等待結構轉折或流動性掃除"
 
-//══════════════════════════════════════════════════════════════
-// 最近有效擺盪低/高（樞軸確認後）
-//══════════════════════════════════════════════════════════════
 var float lastSwingLow = na
 var float lastSwingHigh = na
 var int   lastSwingLowBar = na
 var int   lastSwingHighBar = na
-
 if not na(pl)
     lastSwingLow := pl
     lastSwingLowBar := bar_index - swingLen
 if not na(ph)
     lastSwingHigh := ph
     lastSwingHighBar := bar_index - swingLen
-
-// 實體收盤跌破/升破則標記失效（簡易）
 swingLowBroken = not na(lastSwingLow) and close < lastSwingLow
 swingHighBroken = not na(lastSwingHigh) and close > lastSwingHigh
 
 //══════════════════════════════════════════════════════════════
-// 流動性掃除（僅收K確認 → 訊號不消失）
+// 流動性池數量：未獵取保留數字；被獵取後取消
 //══════════════════════════════════════════════════════════════
-wickMin = sweepWickAtr * atr
+poolVolAt(int pivBar, float lvl, bool isHigh) =>
+    float tol = math.max(nz(atr, 0) * liqEqualAtr, syminfo.mintick)
+    float acc = 0.0
+    int centerOff = bar_index - pivBar
+    if centerOff >= 0
+        int fromOff = math.max(0, centerOff - liqTouchBars)
+        int toOff = centerOff + liqTouchBars
+        for j = fromOff to toOff
+            float px = isHigh ? high[j] : low[j]
+            if math.abs(px - lvl) <= tol
+                acc += nz(volume[j], 0.0)
+        if acc <= 0
+            acc := math.max(nz(volume[centerOff], 0.0), 1.0)
+    else
+        acc := 1.0
+    acc
 
-// v6：布林不可為 na；歷史引用用明確布林比較
+var array<float> liqPrice = array.new_float()
+var array<bool>  liqIsHigh = array.new_bool()
+var array<float> liqVol = array.new_float()
+var array<label> liqLbl = array.new_label()
+var array<bool>  liqAlive = array.new_bool()
+
+countAlive() =>
+    int c = 0
+    int n = array.size(liqAlive)
+    if n > 0
+        for i = 0 to n - 1
+            if array.get(liqAlive, i)
+                c += 1
+    c
+
+f_fmtPool(bool isHigh, float vol) =>
+    (isHigh ? "R↑ " : "S↓ ") + fmtVol(vol)
+
+f_killOldest() =>
+    int n = array.size(liqAlive)
+    if n > 0
+        for k = 0 to n - 1
+            if array.get(liqAlive, k)
+                label old = array.get(liqLbl, k)
+                if not na(old)
+                    label.delete(old)
+                array.set(liqAlive, k, false)
+                break
+
+f_addOrMergePool(float lvl, bool isHigh, float vol, int pivBar) =>
+    float tol = math.max(nz(atr, 0) * liqEqualAtr, syminfo.mintick)
+    bool merged = false
+    int n = array.size(liqPrice)
+    if n > 0
+        for i = 0 to n - 1
+            if array.get(liqAlive, i) and array.get(liqIsHigh, i) == isHigh and math.abs(array.get(liqPrice, i) - lvl) <= tol
+                float nv = array.get(liqVol, i) + vol
+                array.set(liqVol, i, nv)
+                array.set(liqPrice, i, (array.get(liqPrice, i) + lvl) * 0.5)
+                label lb = array.get(liqLbl, i)
+                if not na(lb)
+                    label.set_text(lb, f_fmtPool(isHigh, nv))
+                    label.set_y(lb, array.get(liqPrice, i))
+                merged := true
+                break
+    if not merged and showLiqPool
+        for __i = 0 to 10
+            if countAlive() < maxLiqPools
+                break
+            f_killOldest()
+        label style_ = isHigh ? label.style_label_down : label.style_label_up
+        color bg = isHigh ? color.new(color.fuchsia, 20) : color.new(color.aqua, 20)
+        label lbNew = label.new(pivBar, lvl, f_fmtPool(isHigh, vol), xloc=xloc.bar_index, style=style_, color=bg, textcolor=color.white, size=size.small)
+        array.push(liqPrice, lvl)
+        array.push(liqIsHigh, isHigh)
+        array.push(liqVol, vol)
+        array.push(liqLbl, lbNew)
+        array.push(liqAlive, true)
+
+if not na(ph) and showLiqPool
+    f_addOrMergePool(ph, true, poolVolAt(bar_index - swingLen, ph, true), bar_index - swingLen)
+if not na(pl) and showLiqPool
+    f_addOrMergePool(pl, false, poolVolAt(bar_index - swingLen, pl, false), bar_index - swingLen)
+
+// 被獵取 → 取消數字；未獵取 → 保留
+if barstate.isconfirmed and showLiqPool and array.size(liqAlive) > 0
+    for i = 0 to array.size(liqAlive) - 1
+        if array.get(liqAlive, i)
+            float lvl = array.get(liqPrice, i)
+            bool isH = array.get(liqIsHigh, i)
+            bool hunted = isH ? high > lvl + wickMin : low < lvl - wickMin
+            if hunted
+                label lb = array.get(liqLbl, i)
+                if not na(lb)
+                    label.delete(lb)
+                array.set(liqAlive, i, false)
+
+alivePools = countAlive()
+float aliveVol = 0.0
+if array.size(liqAlive) > 0
+    for i = 0 to array.size(liqAlive) - 1
+        if array.get(liqAlive, i)
+            aliveVol += array.get(liqVol, i)
+
+//══════════════════════════════════════════════════════════════
+// 流動性掃除狀態（進場前置）
+//══════════════════════════════════════════════════════════════
 prevSwingLowBroken = bar_index > 0 ? swingLowBroken[1] : false
 prevSwingHighBroken = bar_index > 0 ? swingHighBroken[1] : false
 sweepLowNow = barstate.isconfirmed and not na(lastSwingLow) and not prevSwingLowBroken and low < lastSwingLow - wickMin and close > lastSwingLow and close > open
@@ -147,7 +237,6 @@ var bool  lowLeftZone = false
 var bool  highLeftZone = false
 
 if barstate.isconfirmed
-    // 過期
     if hasLowSweep and not na(lowSweepBar) and (bar_index - lowSweepBar) > sweepLookback
         hasLowSweep := false
         lowConsumed := false
@@ -156,7 +245,6 @@ if barstate.isconfirmed
         hasHighSweep := false
         highConsumed := false
         highLeftZone := false
-
     if sweepLowNow
         hasLowSweep := true
         lowSweepLevel := lastSwingLow
@@ -169,27 +257,23 @@ if barstate.isconfirmed
         highSweepBar := bar_index
         highConsumed := false
         highLeftZone := false
-
-    // 離開區間（回踩前提）
     if hasLowSweep and not lowConsumed and not na(lowSweepLevel) and close > lowSweepLevel + zoneAtr * atr
         lowLeftZone := true
     if hasHighSweep and not highConsumed and not na(highSweepLevel) and close < highSweepLevel - zoneAtr * atr
         highLeftZone := true
 
-// 有效支撐/阻力
 float validSupport = hasLowSweep and not na(lowSweepLevel) ? lowSweepLevel : (not na(lastSwingLow) and not swingLowBroken and close > lastSwingLow ? lastSwingLow : na)
 float validResist  = hasHighSweep and not na(highSweepLevel) ? highSweepLevel : (not na(lastSwingHigh) and not swingHighBroken and close < lastSwingHigh ? lastSwingHigh : na)
 supNote = hasLowSweep ? "掃除後有效支撐" : (not na(validSupport) ? "擺盪低點支撐" : "無")
 resNote = hasHighSweep ? "掃除後有效阻力" : (not na(validResist) ? "擺盪高點阻力" : "無")
 
 //══════════════════════════════════════════════════════════════
-// 回踩進場（收K確認）
+// 回踩進場
 //══════════════════════════════════════════════════════════════
 rng = high - low
 bodyRatio = rng > 0 ? math.abs(close - open) / rng : 0.0
 bullConfirm = close > open and bodyRatio >= confirmBody
 bearConfirm = close < open and bodyRatio >= confirmBody
-
 bullBiasOk = not requireHtf or consensus == 1 or htfBias == 1
 bearBiasOk = not requireHtf or consensus == -1 or htfBias == -1
 
@@ -201,7 +285,6 @@ var float sigTP = na
 var string sigType = ""
 
 if barstate.isconfirmed
-    // 買：掃除下方 → 離開 → 回踩支撐 → 陽線
     if bullBiasOk and not na(validSupport)
         sweepOk = not requireSweep or hasLowSweep
         unused = not onePerSetup or not lowConsumed
@@ -224,8 +307,6 @@ if barstate.isconfirmed
                 sigType := "S 回踩有效支撐"
                 if onePerSetup
                     lowConsumed := true
-
-    // 賣：掃除上方 → 離開 → 回踩阻力 → 陰線
     if not buySignal and bearBiasOk and not na(validResist)
         sweepOk = not requireSweep or hasHighSweep
         unused = not onePerSetup or not highConsumed
@@ -249,22 +330,17 @@ if barstate.isconfirmed
                 if onePerSetup
                     highConsumed := true
 
-//══════════════════════════════════════════════════════════════
-// 繪圖（收K後固定，不消失）
-//══════════════════════════════════════════════════════════════
 plotshape(showBuy and buySignal, title="買入", style=shape.triangleup, location=location.belowbar, color=color.new(color.teal, 0), size=size.small, text="S")
 plotshape(showSell and sellSignal, title="賣出", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 0), size=size.small, text="R")
-
 plotshape(showSweep and sweepLowNow, title="掃除下方", style=shape.diamond, location=location.belowbar, color=color.aqua, size=size.tiny)
 plotshape(showSweep and sweepHighNow, title="掃除上方", style=shape.diamond, location=location.abovebar, color=color.fuchsia, size=size.tiny)
 
-// 有效支撐/阻力：連續水平價格線（當日從 session 起點延伸）+ 標示 S / R
+// S / R 水平價格線
 var line lnSup = na
 var line lnRes = na
 var label lbSup = na
 var label lbRes = na
 var int sessStartBar = na
-
 if newSess
     if not na(lnSup)
         line.set_x2(lnSup, bar_index - 1)
@@ -313,23 +389,18 @@ if showPlan and (buySignal or sellSignal)
     label.new(bar_index, buySignal ? low : high, buySignal ? "S 回踩有效支撐" : "R 回踩有效阻力", style=buySignal ? label.style_label_up : label.style_label_down, color=buySignal ? color.teal : color.maroon, textcolor=color.white, size=size.small)
 
 //══════════════════════════════════════════════════════════════
-// 中文面版（表格）
+// 中文面版
 //══════════════════════════════════════════════════════════════
-var table panel = table.new(position.top_right, 2, 12, bgcolor=color.new(color.black, 15), border_width=1, border_color=color.gray)
-
-liqTxt =
-     hasLowSweep ? "已掃除下方 ✓" :
-     hasHighSweep ? "已掃除上方 ✓" : "尚未掃除"
-liqCol =
-     hasLowSweep ? color.aqua :
-     hasHighSweep ? color.fuchsia : color.gray
-
+var table panel = table.new(position.top_right, 2, 13, bgcolor=color.new(color.black, 15), border_width=1, border_color=color.gray)
+liqTxt = hasLowSweep ? "已掃除下方 ✓" : hasHighSweep ? "已掃除上方 ✓" : "尚未掃除"
+liqCol = hasLowSweep ? color.aqua : hasHighSweep ? color.fuchsia : color.gray
 armTxt =
      hasLowSweep and not lowConsumed and lowLeftZone ? "偏多｜已離開，等待回踩支撐" :
      hasLowSweep and not lowConsumed ? "偏多｜已掃除，等待離開後回踩" :
      hasHighSweep and not highConsumed and highLeftZone ? "偏空｜已離開，等待回踩阻力" :
      hasHighSweep and not highConsumed ? "偏空｜已掃除，等待離開後回踩" :
      "等待流動性掃除"
+poolTxt = str.tostring(alivePools) + " 池｜量 " + fmtVol(aliveVol) + "（未獵取保留）"
 
 f_cell(int r, string a, string b, color c) =>
     table.cell(panel, 0, r, a, text_color=color.silver, text_halign=text.align_left, text_size=size.small)
@@ -343,14 +414,15 @@ if showPanel and barstate.islast
     f_cell(3, "低週期 圖表", biasCN(ltfBias), biasColor(ltfBias))
     f_cell(4, "綜合偏向", consensusCN(consensus), biasColor(consensus))
     f_cell(5, "理由", reasonTxt, color.white)
-    f_cell(6, "流動性", liqTxt, liqCol)
-    f_cell(7, "有效支撐", na(validSupport) ? "無" : str.tostring(validSupport, format.mintick) + "（" + supNote + "）", color.teal)
-    f_cell(8, "有效阻力", na(validResist) ? "無" : str.tostring(validResist, format.mintick) + "（" + resNote + "）", color.red)
-    f_cell(9, "設置狀態", armTxt, color.aqua)
+    f_cell(6, "流動性狀態", liqTxt, liqCol)
+    f_cell(7, "流動性池", poolTxt, color.orange)
+    f_cell(8, "有效支撐 S", na(validSupport) ? "無" : str.tostring(validSupport, format.mintick) + "（" + supNote + "）", color.teal)
+    f_cell(9, "有效阻力 R", na(validResist) ? "無" : str.tostring(validResist, format.mintick) + "（" + resNote + "）", color.red)
+    f_cell(10, "設置狀態", armTxt, color.aqua)
     lastSigTxt = buySignal ? "買入｜" + sigType : sellSignal ? "賣出｜" + sigType : "無（僅收K確認）"
-    f_cell(10, "最近訊號", lastSigTxt, buySignal ? color.lime : sellSignal ? color.red : color.gray)
-    planTxt = (buySignal or sellSignal) ? ("進場 " + str.tostring(sigEntry, format.mintick) + "  SL " + str.tostring(sigSL, format.mintick) + "  TP " + str.tostring(sigTP, format.mintick)) : "訊號收K後固定不消失"
-    f_cell(11, "計畫", planTxt, color.white)
+    f_cell(11, "最近訊號", lastSigTxt, buySignal ? color.lime : sellSignal ? color.red : color.gray)
+    planTxt = (buySignal or sellSignal) ? ("進場 " + str.tostring(sigEntry, format.mintick) + "  SL " + str.tostring(sigSL, format.mintick) + "  TP " + str.tostring(sigTP, format.mintick)) : "未獵取池保留數字；獵取後取消"
+    f_cell(12, "計畫", planTxt, color.white)
 
 alertcondition(buySignal, "結構買入", "回踩有效支撐買入訊號")
 alertcondition(sellSignal, "結構賣出", "回踩有效阻力賣出訊號")

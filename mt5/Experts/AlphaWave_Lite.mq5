@@ -1,54 +1,43 @@
 //+------------------------------------------------------------------+
 //| AlphaWave_Lite.mq5                                                |
-//| Alpha Wave Lite — analysis / hints / scoring scaffold             |
-//| NO entry strategy. NO auto trading.                               |
+//| Alpha Wave Lite — analysis / panel / alerts ONLY                  |
+//| FORBIDDEN: any order API, auto trading, auto SL/TP                |
 //+------------------------------------------------------------------+
 #property copyright "Alpha Wave"
-#property version   "1.00"
-#property description "Alpha Wave Lite — modular scaffold (analysis only)"
+#property version   "1.10"
+#property description "Alpha Wave Lite — XAUUSD analysis (no auto trading)"
 
-// Include path expects MT5 tree:
-//   MQL5/Experts/AlphaWave_Lite.mq5
-//   MQL5/Include/AlphaWave/*.mqh
-// In this repo files live under mt5/Experts and mt5/Include.
 #include <AlphaWave/AW_All.mqh>
 
-//+------------------------------------------------------------------+
-//| Compile-time edition lock                                         |
-//+------------------------------------------------------------------+
 #define AW_EA_EDITION AW_EDITION_LITE
 
 //+------------------------------------------------------------------+
-//| Inputs — General                                                  |
+//| Hard compile-time guard — Lite must never trade                   |
+//+------------------------------------------------------------------+
+#ifdef AW_LITE_ALLOW_ORDERS
+#error Alpha Wave Lite must not enable order APIs
+#endif
+
 //+------------------------------------------------------------------+
 input group "=== General ==="
-input string            InpSymbolOverride      = "";           // Leave empty = chart symbol (prefer XAUUSD)
-input int               InpMagicNumber         = 20260807;     // Magic (reserved for Pro+)
-input int               InpSlippagePoints      = 30;           // Slippage points (reserved)
+input string            InpSymbolOverride      = "";
+input ulong             InpMagicNumber         = 20260807;     // reserved (unused in Lite)
+input int               InpSlippagePoints      = 30;           // reserved (unused in Lite)
 
-//+------------------------------------------------------------------+
-//| Inputs — Time / Session day                                       |
-//+------------------------------------------------------------------+
-input group "=== Time (UTC+8 session day) ==="
-input int               InpBrokerUtcOffsetHrs  = 2;            // Broker server UTC offset (hours)
-input int               InpTradeTzOffsetHrs    = 8;            // Trade timezone offset (UTC+8)
-input int               InpSessionStartHour    = 4;            // Daily structure start hour (UTC+8)
-input int               InpSessionStartMinute  = 45;           // Daily structure start minute (UTC+8)
+input group "=== Time (UTC+8) ==="
+input int               InpBrokerUtcOffsetHrs  = 2;
+input int               InpTradeTzOffsetHrs    = 8;
+input int               InpSessionStartHour    = 4;
+input int               InpSessionStartMinute  = 45;
 
-//+------------------------------------------------------------------+
-//| Inputs — Logger                                                   |
-//+------------------------------------------------------------------+
 input group "=== Logger ==="
-input ENUM_AW_LOG_LEVEL InpLogMinLevel         = AW_LOG_DEBUG; // Minimum log level
-input bool              InpLogToTerminal       = true;         // Print to Experts journal
-input bool              InpLogToFile           = false;        // Also write Common\\Files log
-input string            InpLogFileName         = "";           // Empty = auto AlphaWave_YYYY.MM.DD.log
-input bool              InpDebugHeartbeat      = true;         // Periodic debug heartbeat
-input int               InpHeartbeatSeconds    = 60;           // Heartbeat interval (seconds)
+input ENUM_AW_LOG_LEVEL InpLogMinLevel         = AW_LOG_INFO;
+input bool              InpLogToTerminal       = true;
+input bool              InpLogToFile           = false;
+input string            InpLogFileName         = "";
+input bool              InpDebugHeartbeat      = true;
+input int               InpHeartbeatSeconds    = 60;
 
-//+------------------------------------------------------------------+
-//| Inputs — Module switches                                          |
-//+------------------------------------------------------------------+
 input group "=== Module Switches ==="
 input bool              InpEnableMarketStructure = true;
 input bool              InpEnableSessionManager  = true;
@@ -57,58 +46,72 @@ input bool              InpEnableFib             = true;
 input bool              InpEnableSetupDetector   = true;
 input bool              InpEnableConfirmation    = true;
 input bool              InpEnableTradeScore      = true;
-input bool              InpEnableRiskManager     = true;       // Monitor only in Lite
-input bool              InpEnableTradeManager    = false;      // Lite: forced OFF
+input bool              InpEnablePanel           = true;
+input bool              InpEnableAlert           = true;
 input bool              InpEnableStatistics      = true;
 
-//+------------------------------------------------------------------+
-//| Inputs — Market Structure                                         |
-//+------------------------------------------------------------------+
-input group "=== Market Structure ==="
-input bool              InpMS_EnableH4         = true;         // Use H4 bias
-input bool              InpMS_EnableH1         = true;         // Use H1 bias
-input bool              InpMS_EnableM15        = true;         // Use M15 structure
-
-//+------------------------------------------------------------------+
-//| Inputs — Session windows (UTC+8 minutes from midnight)            |
-//+------------------------------------------------------------------+
-input group "=== Session Windows (UTC+8 minutes) ==="
+input group "=== Session Windows (UTC+8 minutes from midnight) ==="
 input bool              InpSess_EnableAsia     = true;
 input bool              InpSess_EnableLondon   = true;
 input bool              InpSess_EnableNY       = true;
-input int               InpSess_AsiaStartMin   = 0;            // 00:00
-input int               InpSess_AsiaEndMin     = 480;          // 08:00
-input int               InpSess_LondonStartMin = 480;          // 08:00
-input int               InpSess_LondonEndMin   = 960;          // 16:00
-input int               InpSess_NYStartMin     = 780;          // 13:00
-input int               InpSess_NYEndMin       = 1320;         // 22:00
+input int               InpSess_AsiaStartMin   = 285;   // 04:45
+input int               InpSess_AsiaEndMin     = 720;   // 12:00
+input int               InpSess_LondonStartMin = 900;   // 15:00
+input int               InpSess_LondonEndMin   = 1260;  // 21:00
+input int               InpSess_NYStartMin     = 1200;  // 20:00
+input int               InpSess_NYEndMin       = 150;   // 02:30 (overnight)
 
-//+------------------------------------------------------------------+
-//| Inputs — Liquidity / Fib / Setup / Score (scaffold)               |
-//+------------------------------------------------------------------+
-input group "=== Liquidity ==="
-input int               InpLiq_LookbackBars    = 50;
+input group "=== Market Structure ==="
+input bool              InpMS_EnableH4         = true;
+input bool              InpMS_EnableH1         = true;
+input bool              InpMS_EnableM15        = true;
+input int               InpMS_SwingLeft        = 2;     // swing left bars
+input int               InpMS_SwingRight       = 2;     // swing right confirm bars
+input int               InpMS_Lookback         = 300;
 
-input group "=== Setup Detector (placeholders) ==="
-input bool              InpSetup_EnableA       = true;         // TODO setup A
-input bool              InpSetup_EnableB       = true;         // TODO setup B
-input bool              InpSetup_EnableC       = false;        // TODO setup C
+input group "=== Liquidity Sweep ==="
+input double            InpLiq_PiercePoints    = 50;    // min pierce beyond level (points)
+input double            InpLiq_ReclaimPoints   = 20;    // reclaim buffer (points)
 
-input group "=== Trade Score ==="
-input int               InpScore_MinHint       = 60;           // Lite hint threshold
-input int               InpScore_MinTrade      = 70;           // Reserved for Pro+
+input group "=== Fib Setup ==="
+input double            InpFib_Tol50Points     = 150;   // 0.5 zone tolerance (points)
+input int               InpFib_MinImpulsePts   = 300;   // min impulse leg (points)
 
-//+------------------------------------------------------------------+
-//| Inputs — Risk (monitor only in Lite)                              |
-//+------------------------------------------------------------------+
-input group "=== Risk (monitor only in Lite) ==="
-input double            InpRisk_PercentPerTrade = 0.5;         // % equity per trade (Pro+)
-input double            InpRisk_MaxDailyLossPct = 2.0;         // Max daily loss %
-input double            InpRisk_MaxDrawdownPct  = 5.0;         // Max account DD %
-input int               InpRisk_MaxOpenTrades   = 1;           // Max concurrent trades
+input group "=== M5 Confirmation ==="
+input bool              InpConf_Engulfing      = true;
+input bool              InpConf_PinBar         = true;
+input bool              InpConf_Rejection      = true;
+input bool              InpConf_BOS            = true;
+input bool              InpConf_CHoCH          = true;
+input double            InpConf_PinWickBody    = 2.0;   // pin wick >= body * N
+input double            InpConf_RejectWickBody = 1.5;
+input int               InpConf_SwingLeft      = 2;
+input int               InpConf_SwingRight     = 2;
 
-//+------------------------------------------------------------------+
-//| Globals                                                           |
+input group "=== Trade Score Weights ==="
+input int               InpW_H4                = 15;
+input int               InpW_H1                = 15;
+input int               InpW_M15               = 15;
+input int               InpW_Sweep             = 15;
+input int               InpW_Fib50             = 15;
+input int               InpW_TwoLegPB          = 10;
+input int               InpW_M5Conf            = 15;
+
+input group "=== Bias Score Weights ==="
+input int               InpBiasW_H4            = 20;
+input int               InpBiasW_H1            = 20;
+input int               InpBiasW_M15           = 20;
+input int               InpBiasW_PD            = 15;
+input int               InpBiasW_Asia          = 15;
+input int               InpBiasW_Sweep         = 10;
+
+input group "=== Alert ==="
+input int               InpAlert_MinScore      = 70;    // alert only if score >= this
+input bool              InpAlert_Popup         = true;
+input bool              InpAlert_Push          = false;
+input bool              InpAlert_Sound         = true;
+input string            InpAlert_SoundFile     = "alert.wav";
+
 //+------------------------------------------------------------------+
 CAWLogger               g_logger;
 CAWTimeManager          g_time;
@@ -119,31 +122,31 @@ CAWFibManager           g_fib;
 CAWSetupDetector        g_setup;
 CAWConfirmationManager  g_confirm;
 CAWTradeScore           g_score;
-CAWRiskManager          g_risk;
-CAWTradeManager         g_trade;
+CAWTradeManager         g_trade;      // present but hard-disabled
 CAWStatistics           g_stats;
+CAWPanel                g_panel;
+CAWAlert                g_alert;
 
 string                  g_symbol;
 AWDailyContext          g_daily;
-datetime                g_lastHeartbeat = 0;
+datetime                g_lastHeartbeat=0;
 
 //+------------------------------------------------------------------+
 string ResolveSymbol(void)
   {
-   string s = InpSymbolOverride;
+   string s=InpSymbolOverride;
    StringTrimLeft(s);
    StringTrimRight(s);
-   if(s=="")
-      s = _Symbol;
+   if(s=="") s=_Symbol;
    return s;
   }
 
 //+------------------------------------------------------------------+
 void RunDailyReset(const datetime sessionDayKey)
   {
-   g_daily.sessionDayKey = sessionDayKey;
-   g_daily.lastResetTime = TimeCurrent();
-   g_daily.resetDone     = true;
+   g_daily.sessionDayKey=sessionDayKey;
+   g_daily.lastResetTime=TimeCurrent();
+   g_daily.resetDone=true;
 
    g_structure.DailyReset(g_daily);
    g_session.DailyReset(g_daily);
@@ -152,154 +155,198 @@ void RunDailyReset(const datetime sessionDayKey)
    g_setup.DailyReset(g_daily);
    g_confirm.DailyReset(g_daily);
    g_score.DailyReset(g_daily);
-   g_risk.DailyReset(g_daily);
    g_trade.DailyReset(g_daily);
    g_stats.DailyReset(g_daily);
+   g_alert.DailyReset(g_daily);
 
    g_logger.Info("EA",
-                 StringFormat("DailyReset applied sessionDayKey=%s tradeTzNow=%s",
-                              TimeToString(sessionDayKey,TIME_DATE|TIME_MINUTES),
-                              TimeToString(g_time.NowTradeTz(),TIME_DATE|TIME_SECONDS)));
+                 StringFormat("DailyReset @ UTC+8 %s",
+                              TimeToString(sessionDayKey,TIME_DATE|TIME_MINUTES)));
   }
 
 //+------------------------------------------------------------------+
-void UpdateModules(void)
+void UpdateAnalysis(void)
   {
-   if(InpEnableMarketStructure)
-      g_structure.Update();
    if(InpEnableSessionManager)
       g_session.Update();
+
+   if(InpEnableMarketStructure)
+      g_structure.Update();
+
+   const AWSessionLevels sess=g_session.Levels();
+
    if(InpEnableLiquidity)
-      g_liquidity.Update();
+      g_liquidity.Update(sess);
+
    if(InpEnableFib)
-      g_fib.Update();
+      g_fib.Update(&g_structure);
+
+   const AWFibSetupState fib=g_fib.State();
    if(InpEnableSetupDetector)
-      g_setup.Update();
+      g_setup.UpdateFromFib(fib);
+
    if(InpEnableConfirmation)
-      g_confirm.Update();
+      g_confirm.Update(fib.in_zone,fib.direction);
+
+   const AWSweepState sweep=g_liquidity.State();
+   const AWConfirmState conf=g_confirm.State();
+   const double bid=SymbolInfoDouble(g_symbol,SYMBOL_BID);
+
    if(InpEnableTradeScore)
-      g_score.Update();
-   if(InpEnableRiskManager)
-      g_risk.Update();
-   // TradeManager stays inert in Lite even if switch is true.
+     {
+      g_score.UpdateBias(g_structure.GetH4Bias(),
+                         g_structure.GetH1Bias(),
+                         g_structure.GetM15Bias(),
+                         sess,sweep,bid);
+      g_score.UpdateScore(g_structure.GetH4Bias(),
+                          g_structure.GetH1Bias(),
+                          g_structure.GetM15Bias(),
+                          fib,sweep,conf);
+     }
+
+   // TradeManager must remain inert
    g_trade.Update();
+
    if(InpEnableStatistics)
       g_stats.Update();
+
+   const AWScoreState sc=g_score.ScoreState();
+
+   if(InpEnablePanel)
+      g_panel.Render(g_symbol,
+                     g_score.IntradayBias(),
+                     g_structure.GetH4Bias(),
+                     g_structure.GetH1Bias(),
+                     g_structure.GetM15Bias(),
+                     sess,fib,sweep,conf,sc);
+
+   if(InpEnableAlert)
+      g_alert.MaybeAlert(g_symbol,sc,conf,InpAlert_MinScore);
   }
 
 //+------------------------------------------------------------------+
 void MaybeHeartbeat(void)
   {
-   if(!InpDebugHeartbeat)
-      return;
-   const int interval = MathMax(5,InpHeartbeatSeconds);
-   const datetime now = TimeCurrent();
-   if(g_lastHeartbeat!=0 && (now-g_lastHeartbeat)<interval)
-      return;
-   g_lastHeartbeat = now;
+   if(!InpDebugHeartbeat) return;
+   const int interval=MathMax(5,InpHeartbeatSeconds);
+   const datetime now=TimeCurrent();
+   if(g_lastHeartbeat!=0 && (now-g_lastHeartbeat)<interval) return;
+   g_lastHeartbeat=now;
 
+   const AWScoreState sc=g_score.ScoreState();
    g_logger.Debug("EA",
-                  StringFormat("HB symbol=%s sess=%s tradeTz=%s dayKey=%s H4=%s H1=%s M15=%s score=%d kill=%s stats={%s}",
+                  StringFormat("HB %s sess=%s bias=%s setup=%s score=%d conf=%s",
                                g_symbol,
-                               g_session.ActiveSession(),
-                               TimeToString(g_time.NowTradeTz(),TIME_DATE|TIME_SECONDS),
-                               TimeToString(g_daily.sessionDayKey,TIME_DATE|TIME_MINUTES),
-                               AW_BiasToText(g_structure.GetH4Bias()),
-                               AW_BiasToText(g_structure.GetH1Bias()),
-                               AW_BiasToText(g_structure.GetM15Bias()),
-                               g_score.LastScore(),
-                               (g_risk.KillSwitchArmed() ? g_risk.KillReason() : "OFF"),
-                               g_stats.Snapshot()));
+                               g_session.ActiveSessionName(),
+                               AW_BiasToText(g_score.IntradayBias()),
+                               g_setup.Label(),
+                               sc.score,
+                               g_confirm.Reason()));
   }
 
 //+------------------------------------------------------------------+
 int OnInit(void)
   {
-   g_symbol = ResolveSymbol();
+   g_symbol=ResolveSymbol();
    ZeroMemory(g_daily);
 
-   if(!g_logger.Init("AW-Lite",InpLogMinLevel,InpLogToTerminal,InpLogToFile,InpLogFileName))
-     {
-      // File open may fail; terminal logging can still work if Init partially succeeded.
-      Print("AlphaWave_Lite: Logger Init warning (file may be unavailable)");
-     }
-
-   g_logger.Info("EA",
-                 StringFormat("Starting %s Lite on %s | edition=%s",
-                              AW_PRODUCT_NAME,g_symbol,AW_EditionToText(AW_EA_EDITION)));
+   g_logger.Init("AW-Lite",InpLogMinLevel,InpLogToTerminal,InpLogToFile,InpLogFileName);
+   g_logger.Info("EA",StringFormat("Starting %s Lite on %s (NO AUTO TRADE)",
+                                   AW_PRODUCT_NAME,g_symbol));
 
    if(StringFind(g_symbol,"XAU")<0 && StringFind(g_symbol,"GOLD")<0)
-      g_logger.Warn("EA","Symbol is not XAU/GOLD — system is designed primarily for XAUUSD");
+      g_logger.Warn("EA","Primary design target is XAUUSD");
 
-   if(!g_time.Init(&g_logger,
-                   InpBrokerUtcOffsetHrs,
-                   InpTradeTzOffsetHrs,
-                   InpSessionStartHour,
-                   InpSessionStartMinute))
-     {
-      g_logger.Error("EA","TimeManager Init failed");
+   if(!g_time.Init(&g_logger,InpBrokerUtcOffsetHrs,InpTradeTzOffsetHrs,
+                   InpSessionStartHour,InpSessionStartMinute))
       return INIT_FAILED;
-     }
 
-   g_structure.Init(g_symbol,&g_logger,&g_time,
-                    InpMS_EnableH4,InpMS_EnableH1,InpMS_EnableM15);
+   g_structure.Init(g_symbol,&g_logger,
+                    InpMS_EnableH4,InpMS_EnableH1,InpMS_EnableM15,
+                    InpMS_SwingLeft,InpMS_SwingRight,InpMS_Lookback);
 
-   g_session.Init(&g_logger,&g_time,
+   g_session.Init(g_symbol,&g_logger,&g_time,
                   InpSess_EnableAsia,InpSess_EnableLondon,InpSess_EnableNY,
                   InpSess_AsiaStartMin,InpSess_AsiaEndMin,
                   InpSess_LondonStartMin,InpSess_LondonEndMin,
                   InpSess_NYStartMin,InpSess_NYEndMin);
 
-   g_liquidity.Init(g_symbol,&g_logger,InpEnableLiquidity,InpLiq_LookbackBars);
-   g_fib.Init(g_symbol,&g_logger,InpEnableFib);
-   g_setup.Init(g_symbol,&g_logger,InpEnableSetupDetector,
-                InpSetup_EnableA,InpSetup_EnableB,InpSetup_EnableC);
-   g_confirm.Init(g_symbol,&g_logger,InpEnableConfirmation);
-   g_score.Init(&g_logger,InpEnableTradeScore,InpScore_MinHint,InpScore_MinTrade);
-   g_risk.Init(&g_logger,InpEnableRiskManager,
-               InpRisk_PercentPerTrade,InpRisk_MaxDailyLossPct,
-               InpRisk_MaxDrawdownPct,InpRisk_MaxOpenTrades);
+   g_liquidity.Init(g_symbol,&g_logger,InpEnableLiquidity,
+                    InpLiq_PiercePoints,InpLiq_ReclaimPoints);
 
-   // Lite hard-lock: auto trade always false regardless of input.
-   const bool want_trade = false;
-   if(InpEnableTradeManager)
-      g_logger.Warn("EA","InpEnableTradeManager=true ignored in Lite edition");
+   g_fib.Init(g_symbol,&g_logger,InpEnableFib,
+              InpFib_Tol50Points,InpFib_MinImpulsePts);
 
-   g_trade.Init(g_symbol,&g_logger,&g_risk,AW_EA_EDITION,want_trade,
-                (ulong)InpMagicNumber,InpSlippagePoints);
+   g_setup.Init(&g_logger,InpEnableSetupDetector);
+
+   g_confirm.Init(g_symbol,&g_logger,InpEnableConfirmation,
+                  InpConf_Engulfing,InpConf_PinBar,InpConf_Rejection,
+                  InpConf_BOS,InpConf_CHoCH,
+                  InpConf_PinWickBody,InpConf_RejectWickBody,
+                  InpConf_SwingLeft,InpConf_SwingRight);
+
+   AWScoreWeights w;
+   ZeroMemory(w);
+   w.w_h4=InpW_H4; w.w_h1=InpW_H1; w.w_m15=InpW_M15;
+   w.w_sweep=InpW_Sweep; w.w_fib50=InpW_Fib50;
+   w.w_two_leg_pb=InpW_TwoLegPB; w.w_m5_conf=InpW_M5Conf;
+   w.bias_h4=InpBiasW_H4; w.bias_h1=InpBiasW_H1; w.bias_m15=InpBiasW_M15;
+   w.bias_pd_pos=InpBiasW_PD; w.bias_asia=InpBiasW_Asia; w.bias_sweep=InpBiasW_Sweep;
+
+   g_score.Init(&g_logger,InpEnableTradeScore,w,InpAlert_MinScore);
+
+   // Lite: trade manager forced OFF — never place orders
+   g_trade.Init(g_symbol,&g_logger,NULL,AW_EA_EDITION,false,InpMagicNumber,InpSlippagePoints);
+
    g_stats.Init(&g_logger,InpEnableStatistics);
+   g_alert.Init(&g_logger,InpEnableAlert,InpAlert_Popup,InpAlert_Push,
+                InpAlert_Sound,InpAlert_SoundFile);
 
-   // First-load daily reset
-   datetime dayKey = 0;
+   if(InpEnablePanel)
+      g_panel.Init(ChartID(),"AWLitePanel");
+
+   datetime dayKey=0;
    if(g_time.CheckAndConsumeDailyReset(dayKey))
       RunDailyReset(dayKey);
 
-   UpdateModules();
+   UpdateAnalysis();
    MaybeHeartbeat();
 
-   g_logger.Info("EA","OnInit complete — analysis scaffold ready (no strategy / no trading)");
+   g_logger.Info("EA","OnInit complete — analysis only");
    return INIT_SUCCEEDED;
   }
 
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   g_logger.Info("EA",StringFormat("OnDeinit reason=%d stats={%s}",reason,g_stats.Snapshot()));
+   g_panel.Deinit();
+   g_logger.Info("EA",StringFormat("OnDeinit reason=%d",reason));
    g_logger.Close();
   }
 
 //+------------------------------------------------------------------+
 void OnTick(void)
   {
-   // Keep OnTick thin: time reset → module updates → debug heartbeat.
-   datetime dayKey = 0;
+   datetime dayKey=0;
    if(g_time.CheckAndConsumeDailyReset(dayKey))
       RunDailyReset(dayKey);
 
-   UpdateModules();
+   UpdateAnalysis();
    MaybeHeartbeat();
 
-   // Intentionally no entry strategy and no order placement in Lite scaffold.
+   // Intentionally no order placement / no positions / no SL-TP management.
   }
 
+//+------------------------------------------------------------------+
+void OnTimer(void) {}
+
+//+------------------------------------------------------------------+
+//| Safety: reject any future trade attempt at EA layer               |
+//+------------------------------------------------------------------+
+bool AW_LiteBlockTrading(string &reason)
+  {
+   reason="Alpha Wave Lite forbids auto trading";
+   g_logger.LogRejectReason("TRADE_BLOCK",reason);
+   return false;
+  }
 //+------------------------------------------------------------------+

@@ -1,85 +1,44 @@
-# Alpha Wave — MT5 / MQL5 XAUUSD Quant Scaffold
+# Alpha Wave Lite — MT5 Analysis EA
 
-Modular Expert Advisor framework for XAUUSD on MetaTrader 5.
+Analysis-only Expert Advisor for XAUUSD. **Does not place orders.**
 
-## Versions
+## Features
 
-| Version | Name | Role |
-|--------|------|------|
-| 1 | **Alpha Wave Lite** | Market analysis, drawing hooks, hints, signal scoring — **no auto trading** |
-| 2 | Alpha Wave Pro | Lite analysis + auto trade, SL/TP, risk, kill switch |
-| 3 | Alpha Wave Institutional | Pro + regime filters, quality score, stats, reject low-quality trades |
+1. **Session system (UTC+8)** — Asia / London / NY windows (all `input`), PDH/PDL, PDO/CDO, session H/L/Open
+2. **Market structure** — H4/H1/M15 swing HH/HL/LH/LL, BOS, CHoCH → Bullish / Bearish / Neutral
+3. **Intraday bias** — rule-based score from structure, PD location, Asia range, sweeps
+4. **Liquidity sweep** — pierce + reclaim for PDH/PDL/Asia/London (thresholds as `input`)
+5. **Fib setup** — reset 04:45 UTC+8; two-leg trend → Fib 0/0.25/0.5/0.618/0.75/1; two-leg pullback into 0.5 zone
+6. **M5 confirmation** — Engulfing / Pin / Rejection / BOS / CHoCH (only in Fib zone)
+7. **Trade quality score** — 0–100 with configurable weights + band labels
+8. **Chart panel** — top-right HUD
+9. **Alert** — only when score ≥ `InpAlert_MinScore`
 
-This repository step implements **Lite scaffold only**: architecture, inputs, UTC+8 time, daily 04:45 reset, debug logger. **No entry strategy. No orders.**
-
-## Layout
+## Install
 
 ```
-mt5/
-  Experts/AlphaWave_Lite.mq5
-  Include/AlphaWave/
-    AW_All.mqh
-    AW_Common.mqh
-    AW_Logger.mqh
-    AW_TimeManager.mqh
-    AW_MarketStructure.mqh
-    AW_SessionManager.mqh
-    AW_LiquidityManager.mqh
-    AW_FibManager.mqh
-    AW_SetupDetector.mqh
-    AW_ConfirmationManager.mqh
-    AW_TradeScore.mqh
-    AW_RiskManager.mqh
-    AW_TradeManager.mqh
-    AW_Statistics.mqh
+mt5/Experts/AlphaWave_Lite.mq5  →  MQL5/Experts/
+mt5/Include/AlphaWave/*         →  MQL5/Include/AlphaWave/
 ```
 
-Copy into your MT5 data folder:
+Compile in MetaEditor. Attach to XAUUSD chart (any TF; analysis uses H4/H1/M15/M5 internally).
 
-- `mt5/Experts/*` → `MQL5/Experts/`
-- `mt5/Include/AlphaWave/*` → `MQL5/Include/AlphaWave/`
+## Important inputs
 
-Then compile `AlphaWave_Lite.mq5` in MetaEditor.
+| Group | Key inputs |
+|-------|------------|
+| Time | Broker UTC offset, trade TZ (+8), day start 04:45 |
+| Session | Asia/London/NY start-end minutes (UTC+8) |
+| Structure | Swing left/right bars |
+| Liquidity | Pierce / reclaim points |
+| Fib | 0.5 tolerance, min impulse |
+| M5 | Pin wick/body ratio (default 2.0) |
+| Score | Per-factor weights |
+| Alert | Min score, popup/push/sound |
 
-## Shared rules (enforced in design)
+## Safety
 
-- Prefer XAUUSD; TFs: H4/H1 bias, M15 setup, M5 confirm
-- Trade timezone **UTC+8**; daily structure reset at **04:45 UTC+8**
-- Modular classes — logic not dumped into `OnTick()`
-- Every condition / module toggleable via `input`
-- No martingale / grid / averaging down / stealth SL removal
-- Prefer max drawdown control over max profit
-- Log entry reasons and reject reasons (APIs ready)
-- Same bar must not re-fire the same setup id (`SetupDetector.ConsumeIfNewBar`)
-- Unclear rules → independent stub + `TODO` (do not invent strategy)
-
-## Module map
-
-| Module | Purpose |
-|--------|---------|
-| **TimeManager** | Broker ↔ UTC ↔ UTC+8; session-day key; detect/consume daily 04:45 reset |
-| **MarketStructure** | H4/H1 bias + M15 structure (stub) |
-| **SessionManager** | Asia / London / NY windows in UTC+8 minutes (stub policy) |
-| **LiquidityManager** | Liquidity pools / sweeps (stub) |
-| **FibManager** | Fib / OTE levels (stub) |
-| **SetupDetector** | M15 setups + same-bar dedupe helper (stub) |
-| **ConfirmationManager** | M5 confirmation (stub) |
-| **TradeScore** | Signal quality score + thresholds (stub) |
-| **RiskManager** | Risk %, daily loss, DD kill-switch; forbids martingale/grid/avg-down |
-| **TradeManager** | Order API; **hard-disabled in Lite** |
-| **Statistics** | Counters / future Institutional stats |
-| **Logger** | Terminal/file debug log; entry & reject reason APIs |
-
-## Lite behaviour
-
-1. `OnInit` wires all modules from inputs.
-2. First load + each UTC+8 04:45 crossing → `DailyReset` on every module.
-3. `OnTick` only: check reset → `UpdateModules()` → optional heartbeat log.
-4. Auto trade forced off regardless of `InpEnableTradeManager`.
-
-## Next steps (not in this PR)
-
-- Confirm and implement structure / liquidity / fib / setup / confirm rules
-- Chart drawing & hint UI for Lite
-- Pro: TradeManager + mandatory SL/TP + risk sizing
-- Institutional: regime filters + quality reject + deeper statistics
+- Edition locked to Lite
+- `CAWTradeManager` auto-trade forced `false`
+- No order placement APIs in EA analysis path
+- Same-bar signal dedupe helpers in Fib / Confirmation / Alert

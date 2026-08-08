@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //| AW_All.mqh                                                        |
-//| Alpha Wave — master include for EA / tests                        |
+//| Alpha Wave — master include                                       |
 //+------------------------------------------------------------------+
 #property copyright "Alpha Wave"
 
@@ -20,6 +20,8 @@
 #include "AW_RiskManager.mqh"
 #include "AW_TradeManager.mqh"
 #include "AW_Statistics.mqh"
+#include "AW_Panel.mqh"
+#include "AW_Alert.mqh"
 
 #endif
 //+------------------------------------------------------------------+
